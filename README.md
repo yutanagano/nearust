@@ -28,3 +28,4 @@ $ echo $'fizz\nfuzz\nbuzz' | nearust
 ### Future plans / extensions
 - Allow user to set threshold edit distance (but maybe realistically only up to 2?) e.g. `nearust --distance 2`
 - Read from files instead of `stdin` -- this will allow two different files / buffers as input, allowing `nearust` to also handle cases where we want to look for pairs *across* two different multisets e.g. `nearust --anchors file1.txt --comparisons file2.txt`
+- Concurrency and parallelism -- use multiple CPU cores for blazingly fast performance while also not requiring a GPU
