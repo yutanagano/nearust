@@ -1,6 +1,6 @@
 # nearust
 
-`nearust` is a minimal CLI utility for finding pairs of nearest neighbour strings that fall within 1 or 2 edit distance using Chotisorayuth and Mayer's [symdel algorithm](https://arxiv.org/html/2403.09010v1).
+`nearust` is a minimal CLI utility for finding pairs of nearest neighbour strings that fall within 1 or 2 edit distance using Chotisorayuth and Mayer's [symdel algorithm](https://arxiv.org/abs/2403.09010v1).
 
 ## Planned features / proposed specs
 ### Read from `stdin`
