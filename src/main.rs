@@ -84,6 +84,8 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Result<HashSet<Strin
             let mut variant = "".to_string();
             let mut offset = 0;
 
+            // NOTE: we should use char iteration instead of direct indexing here because this will
+            // get screwed up when we use non-ASCII UTF-8 strings
             for idx in deletion_indices.iter() {
                 variant += &input[offset..*idx];
                 offset = idx + 1;
