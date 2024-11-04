@@ -25,17 +25,17 @@ fn nearust(
     // The error stream is currently unused as we do not handle any errors, and thus its name is
     // prefixed with an underscore.
 
-    let strings = get_string_vector(in_stream).unwrap();
+    let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
 
     // Make hash map of all possible substrings that can be generated from input strings via making
     // deletions up to the threshold level, where the keys are the substrings and the values are
     // vectors of indices corresponding to the input strings from which the substrings can be
     // generated.
-    let mut variant_dict: HashMap<String, Vec<usize>> = HashMap::new();
-    for (idx, s) in strings.iter().enumerate() {
+    let mut variant_dict: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    for (idx, s) in input_strings.iter().enumerate() {
         let variants = get_deletion_variants(s, 1).unwrap();
         for v in variants.iter() {
-            let entry = variant_dict.entry(v.to_string()).or_default();
+            let entry = variant_dict.entry(v.clone()).or_default();
             entry.push(idx);
         }
     }
@@ -48,57 +48,58 @@ fn nearust(
     Ok(())
 }
 
-fn get_string_vector(in_stream: impl Read) -> Result<Vec<String>, Error> {
-    // Read lines from in_stream until EOF and collect into vector of string slices.
+fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error> {
+    // Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
+    // errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
+    // is guaranteed to only contain ASCII bytes.
+
     let reader = BufReader::new(in_stream);
     let mut strings = Vec::new();
 
     for line in reader.lines() {
-        let line_as_string = line?.to_string();
+        let line_as_bytes = line?.into_bytes();
 
-        if !line_as_string.is_ascii() {
+        if !line_as_bytes.is_ascii() {
             return Err(Error::new(ErrorKind::InvalidData, "Input must be valid ASCII"));
         }
 
-        strings.push(line_as_string);
+        strings.push(line_as_bytes);
     }
 
     Ok(strings)
 }
 
-fn get_deletion_variants(input: &str, max_deletions: u8) -> Result<HashSet<String>, &'static str> {
+fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<u8>>, &'static str> {
     // Given an input string, generate all possible strings after making at most max_deletions
     // single-character deletions.
 
     if max_deletions > 2 {
-        return Err("Thresholds above 2 edit distance are unsupported.")
+        return Err("Thresholds above 2 edit distance are unsupported")
     }
 
-    let input_length = input.chars().count();
+    let input_length = input.len();
     if input_length > 255 {
-        return Err("Input strings longer than 255 characters are unsupported.")
+        return Err("Input strings longer than 255 characters are unsupported")
     }
 
     let mut deletion_variants = HashSet::new();
-    deletion_variants.insert(input.to_string());
+    deletion_variants.insert(input.to_vec());
     
     for num_deletions in 1..=max_deletions {
         if num_deletions > input_length as u8 {
-            deletion_variants.insert("".to_string());
-            continue
+            deletion_variants.insert(Vec::new());
+            break
         }
 
         for deletion_indices in get_k_combinations(input_length, num_deletions as usize)? {
-            let mut variant = "".to_string();
+            let mut variant = Vec::new();
             let mut offset = 0;
 
-            // NOTE: we should use char iteration instead of direct indexing here because this will
-            // get screwed up when we use non-ASCII UTF-8 strings
             for idx in deletion_indices.iter() {
-                variant += &input[offset..*idx];
+                variant.extend(&input[offset..*idx]);
                 offset = idx + 1;
             }
-            variant += &input[offset..input_length];
+            variant.extend(&input[offset..input_length]);
 
             deletion_variants.insert(variant);
         }
@@ -151,8 +152,8 @@ mod tests {
 
     #[test]
     fn test_get_string_vector() {
-        let strings = get_string_vector(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
-        let expected = vec!["foo", "bar", "baz"];
+        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
+        let expected: Vec<Vec<u8>> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
     }
 
@@ -172,20 +173,20 @@ mod tests {
 
     #[test]
     fn test_get_deletion_variants() {
-        let variants = get_deletion_variants("foo", 1).unwrap();
+        let variants = get_deletion_variants(b"foo", 1).unwrap();
         let mut expected = HashSet::new();
-        expected.insert("foo".to_string());
-        expected.insert("fo".to_string());
-        expected.insert("oo".to_string());
+        expected.insert("foo".into());
+        expected.insert("fo".into());
+        expected.insert("oo".into());
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants("foo", 2).unwrap();
+        let variants = get_deletion_variants(b"foo", 2).unwrap();
         let mut expected = HashSet::new();
-        expected.insert("foo".to_string());
-        expected.insert("fo".to_string());
-        expected.insert("oo".to_string());
-        expected.insert("f".to_string());
-        expected.insert("o".to_string());
+        expected.insert("foo".into());
+        expected.insert("fo".into());
+        expected.insert("oo".into());
+        expected.insert("f".into());
+        expected.insert("o".into());
         assert_eq!(variants, expected);
     }
 }
