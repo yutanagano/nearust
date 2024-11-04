@@ -40,8 +40,23 @@ fn nearust(
         }
     }
 
-    // TODO: iterate through the hashmap generated above, examine and double check hits to see if
-    // they are real (this will require an implementation of Levenshtein distance)
+    // iterate through the hashmap generated above and collect all candidates for hits
+    let mut hit_candidates: HashSet<(usize, usize)> = HashSet::new();
+    for (_, indices) in variant_dict.iter() {
+        let combs = match get_k_combinations(indices.len(), 2) {
+            Ok(v) => v,
+            Err(_) => continue
+        };
+        for pair in combs.iter().map(|comb| {
+            (indices[comb[0]], indices[comb[1]])
+        }) {
+            hit_candidates.insert(pair);
+        }
+    }
+
+    // TODO: examine and double check hits to see if they are real (this will require an 
+    // implementation of Levenshtein distance)
+
     // TODO: Make a record of all validated hits, and print them out to out_stream
 
     let _ = out_stream.write("1,2".as_bytes()).unwrap();
@@ -69,17 +84,17 @@ fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error>
     Ok(strings)
 }
 
-fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<u8>>, &'static str> {
+fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<u8>>, Error> {
     // Given an input string, generate all possible strings after making at most max_deletions
     // single-character deletions.
 
     if max_deletions > 2 {
-        return Err("Thresholds above 2 edit distance are unsupported")
+        return Err(Error::new(ErrorKind::InvalidInput, "Thresholds above 2 edit distance are unsupported"))
     }
 
     let input_length = input.len();
     if input_length > 255 {
-        return Err("Input strings longer than 255 characters are unsupported")
+        return Err(Error::new(ErrorKind::InvalidInput, "Input strings longer than 255 characters are unsupported"))
     }
 
     let mut deletion_variants = HashSet::new();
@@ -108,11 +123,11 @@ fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<
     Ok(deletion_variants)
 }
 
-fn get_k_combinations(n: usize, k: usize) -> Result<Vec<Vec<usize>>, &'static str> {
+fn get_k_combinations(n: usize, k: usize) -> Result<Vec<Vec<usize>>, Error> {
     // Return a vector containing all k-combinations of the integers in the range 0..n.
 
     if k > n {
-        return Err("k cannot be larger than n")
+        return Err(Error::new(ErrorKind::InvalidInput, "k cannot be larger than n"))
     }
 
     let mut combinations: Vec<Vec<usize>> = Vec::new();
