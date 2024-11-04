@@ -1,16 +1,15 @@
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::io::{Read, Write};
+use std::io::{stderr, stdin, stdout, BufReader, BufRead, Error, ErrorKind, Read, Write};
 
-fn main() -> Result<(), io::Error> {
-    nearust(&mut io::stdin(), &mut io::stdout(), &mut io::stderr())
+fn main() -> Result<(), Error> {
+    nearust(stdin(), stdout(), stderr())
 }
 
 fn nearust(
-    in_stream: &mut impl Read, 
-    out_stream: &mut impl Write, 
-    _err_stream: &mut impl Write
-) -> Result<(), io::Error> {
+    in_stream: impl Read, 
+    mut out_stream: impl Write, 
+    mut _err_stream: impl Write
+) -> Result<(), Error> {
     // Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
     // Strings where each String is a line from in_stream. Performs symdel to look for String
     // pairs within 1 edit distance. Outputs the detected pairs from symdel into out_stream, where
@@ -49,12 +48,21 @@ fn nearust(
     Ok(())
 }
 
-fn get_string_vector(in_stream: &mut impl Read) -> Result<Vec<String>, io::Error> {
+fn get_string_vector(in_stream: impl Read) -> Result<Vec<String>, Error> {
     // Read lines from in_stream until EOF and collect into vector of string slices.
+    let reader = BufReader::new(in_stream);
+    let mut strings = Vec::new();
 
-    let mut in_buffer = "".to_string();
-    in_stream.read_to_string(&mut in_buffer)?;
-    let strings: Vec<String> = in_buffer.lines().map(|line| line.to_string()).collect();
+    for line in reader.lines() {
+        let line_as_string = line?.to_string();
+
+        if !line_as_string.is_ascii() {
+            return Err(Error::new(ErrorKind::InvalidData, "Input must be valid ASCII"));
+        }
+
+        strings.push(line_as_string);
+    }
+
     Ok(strings)
 }
 
