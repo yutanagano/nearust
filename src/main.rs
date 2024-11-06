@@ -56,10 +56,17 @@ fn nearust(
 
     // TODO: examine and double check hits to see if they are real (this will require an 
     // implementation of Levenshtein distance)
+    for hit_candidate in hit_candidates.iter() {
+        let idx0 = hit_candidate.0;
+        let idx1 = hit_candidate.1;
 
-    // TODO: Make a record of all validated hits, and print them out to out_stream
+        let dist = levenshtein(&input_strings[idx0], &input_strings[idx1]);
 
-    let _ = out_stream.write("1,2".as_bytes()).unwrap();
+        if dist <= 1 {
+            write!(&mut out_stream, "{idx0},{idx1}\n").unwrap();
+        }
+    }
+
     Ok(())
 }
 
@@ -153,16 +160,56 @@ fn combination_search(n: usize, k: usize, start: usize, current_combination: &mu
     };
 }
 
+fn levenshtein(anchor: &[u8], comparison: &[u8]) -> u8 {
+    assert!(anchor.len() < 255);
+
+    let mut dist_row_prev = [0u8; 255];
+    let mut dist_row = [0u8; 255];
+
+    for i in 0..=anchor.len() {
+        dist_row_prev[i] = i as u8;
+    }
+
+    for j in 1..=comparison.len() {
+        dist_row[0] = j as u8;
+
+        for i in 1..=anchor.len() {
+            if anchor[i-1] == comparison[j-1] {
+                dist_row[i] = dist_row_prev[i-1];
+                continue
+            }
+
+            let insertion_cost = dist_row_prev[i] + 1;
+            let deletion_cost = dist_row[i-1] + 1;
+            let substitution_cost = dist_row_prev[i-1] + 1;
+            
+            dist_row[i] = *[insertion_cost, deletion_cost, substitution_cost].iter().min().unwrap();
+        }
+        
+        for i in 0..=anchor.len() {
+            dist_row_prev[i] = dist_row[i];
+        }
+    }
+
+    return dist_row[anchor.len()];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str;
 
     #[test]
     fn test_nearust() {
         let mut out = Vec::new();
         let mut err = Vec::new();
         nearust(&mut "foo\nbar\nbaz".as_bytes(), &mut out, &mut err).unwrap();
-        assert_eq!(out, b"1,2");
+        assert_eq!(out, b"1,2\n");
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        nearust(&mut "fizz\nfuzz\nbuzz".as_bytes(), &mut out, &mut err).unwrap();
+        assert_eq!(str::from_utf8(&out).unwrap(), "0,1\n1,2\n");
     }
 
     #[test]
@@ -203,5 +250,14 @@ mod tests {
         expected.insert("f".into());
         expected.insert("o".into());
         assert_eq!(variants, expected);
+    }
+
+    #[test]
+    fn test_levenshtein() {
+        // let result = levenshtein(b"foo", b"bar");
+        // assert_eq!(result, 3);
+
+        let result = levenshtein(b"kitten", b"sitting");
+        assert_eq!(result, 3);
     }
 }
