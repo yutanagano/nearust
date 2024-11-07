@@ -1,5 +1,6 @@
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::io::{stderr, stdin, stdout, BufReader, BufRead, Error, ErrorKind, Read, Write};
+use std::io::{stderr, stdin, stdout, BufReader, BufRead, BufWriter, Error, ErrorKind, Read, Write};
 
 fn main() -> Result<(), Error> {
     nearust(stdin(), stdout(), stderr())
@@ -7,7 +8,7 @@ fn main() -> Result<(), Error> {
 
 fn nearust(
     in_stream: impl Read, 
-    mut out_stream: impl Write, 
+    out_stream: impl Write, 
     mut _err_stream: impl Write
 ) -> Result<(), Error> {
     // Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
@@ -21,6 +22,7 @@ fn nearust(
     // The function accepts the three aforementioned streams as parameters instead of having them
     // directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
     // easily bound to other buffers for the purposes of testing.
+    let threshold: u8 = 1;
 
     let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
     let max_num_vars: usize = input_strings.iter().map(|s| get_num_deletion_variants(s.len() as u8, 1)).sum();
@@ -55,15 +57,27 @@ fn nearust(
 
     // Examine and double check hits to see if they are real (this will require an 
     // implementation of Levenshtein distance)
+    let mut writer = BufWriter::new(out_stream);
     for hit_candidate in hit_candidates.iter() {
-        let idx0 = hit_candidate.0;
-        let idx1 = hit_candidate.1;
+        let anchor_idx = hit_candidate.0;
+        let comparison_idx = hit_candidate.1;
 
-        let dist = levenshtein(&input_strings[idx0], &input_strings[idx1]);
+        let anchor = &input_strings[hit_candidate.0];
+        let comparison = &input_strings[hit_candidate.1];
 
-        if dist <= 1 {
-            write!(&mut out_stream, "{idx0},{idx1}\n").unwrap();
+        if anchor.len() > comparison.len() && anchor.len() - comparison.len() < threshold as usize && levenshtein(anchor, comparison) > threshold {
+            continue
         }
+
+        if anchor.len() < comparison.len() && comparison.len() - anchor.len() < threshold as usize && levenshtein(anchor, comparison) > threshold {
+            continue
+        }
+
+        if anchor.len() == comparison.len() && levenshtein(anchor, comparison) > threshold {
+            continue
+        }
+
+        write!(&mut writer, "{anchor_idx},{comparison_idx}\n").unwrap();
     }
 
     Ok(())
@@ -180,8 +194,6 @@ fn combination_search(n: usize, k: usize, start: usize, current_combination: &mu
 }
 
 fn levenshtein(anchor: &[u8], comparison: &[u8]) -> u8 {
-    assert!(anchor.len() < 255);
-
     let mut dist_row_prev = [0u8; 255];
     let mut dist_row = [0u8; 255];
 
@@ -202,7 +214,7 @@ fn levenshtein(anchor: &[u8], comparison: &[u8]) -> u8 {
             let deletion_cost = dist_row[i-1] + 1;
             let substitution_cost = dist_row_prev[i-1] + 1;
 
-            dist_row[i] = *[insertion_cost, deletion_cost, substitution_cost].iter().min().unwrap();
+            dist_row[i] = min(min(insertion_cost, deletion_cost), substitution_cost);
         }
 
         for i in 0..=anchor.len() {
