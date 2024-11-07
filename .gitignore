@@ -1,1 +1,6 @@
 /target
+/cdr3s.txt
+/cdr3s_long.txt
+/results.txt
+/perf.data*
+/flamegraph.svg
