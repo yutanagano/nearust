@@ -21,17 +21,15 @@ fn nearust(
     // The function accepts the three aforementioned streams as parameters instead of having them
     // directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
     // easily bound to other buffers for the purposes of testing.
-    //
-    // The error stream is currently unused as we do not handle any errors, and thus its name is
-    // prefixed with an underscore.
 
     let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
+    let max_num_vars: usize = input_strings.iter().map(|s| get_num_deletion_variants(s.len() as u8, 1)).sum();
 
     // Make hash map of all possible substrings that can be generated from input strings via making
     // deletions up to the threshold level, where the keys are the substrings and the values are
     // vectors of indices corresponding to the input strings from which the substrings can be
     // generated.
-    let mut variant_dict: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    let mut variant_dict: HashMap<Vec<u8>, Vec<usize>> = HashMap::with_capacity(max_num_vars);
     for (idx, s) in input_strings.iter().enumerate() {
         let variants = get_deletion_variants(s, 1).unwrap();
         for v in variants.iter() {
@@ -41,7 +39,8 @@ fn nearust(
     }
 
     // iterate through the hashmap generated above and collect all candidates for hits
-    let mut hit_candidates: HashSet<(usize, usize)> = HashSet::new();
+    let max_num_hit_candidates: usize = variant_dict.iter().map(|(_, inds)| inds.len() * (inds.len() - 1) / 2).sum();
+    let mut hit_candidates: HashSet<(usize, usize)> = HashSet::with_capacity(max_num_hit_candidates);
     for (_, indices) in variant_dict.iter() {
         let combs = match get_k_combinations(indices.len(), 2) {
             Ok(v) => v,
@@ -54,7 +53,7 @@ fn nearust(
         }
     }
 
-    // TODO: examine and double check hits to see if they are real (this will require an 
+    // Examine and double check hits to see if they are real (this will require an 
     // implementation of Levenshtein distance)
     for hit_candidate in hit_candidates.iter() {
         let idx0 = hit_candidate.0;
@@ -91,6 +90,26 @@ fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error>
     Ok(strings)
 }
 
+fn get_num_deletion_variants(input_len: u8, max_deletions: u8) -> usize {
+    let input_len = input_len as usize;
+    let max_deletions = max_deletions as usize;
+    let mut total_num_variants = 0;
+
+    for num_dels in 0..=max_deletions {
+        if num_dels == 0 {
+            total_num_variants += 1;
+            continue
+        }
+
+        let num_perms: usize = (input_len-num_dels+1..=input_len).product();
+        let num_orderings: usize = (1..=num_dels).product();
+        let num_combinations = num_perms / num_orderings;
+        total_num_variants += num_combinations;
+    }
+
+    total_num_variants
+}
+
 fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<u8>>, Error> {
     // Given an input string, generate all possible strings after making at most max_deletions
     // single-character deletions.
@@ -106,7 +125,7 @@ fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<
 
     let mut deletion_variants = HashSet::new();
     deletion_variants.insert(input.to_vec());
-    
+
     for num_deletions in 1..=max_deletions {
         if num_deletions > input_length as u8 {
             deletion_variants.insert(Vec::new());
@@ -182,10 +201,10 @@ fn levenshtein(anchor: &[u8], comparison: &[u8]) -> u8 {
             let insertion_cost = dist_row_prev[i] + 1;
             let deletion_cost = dist_row[i-1] + 1;
             let substitution_cost = dist_row_prev[i-1] + 1;
-            
+
             dist_row[i] = *[insertion_cost, deletion_cost, substitution_cost].iter().min().unwrap();
         }
-        
+
         for i in 0..=anchor.len() {
             dist_row_prev[i] = dist_row[i];
         }
@@ -254,10 +273,16 @@ mod tests {
 
     #[test]
     fn test_levenshtein() {
-        // let result = levenshtein(b"foo", b"bar");
-        // assert_eq!(result, 3);
+        let result = levenshtein(b"foo", b"bar");
+        assert_eq!(result, 3);
 
         let result = levenshtein(b"kitten", b"sitting");
         assert_eq!(result, 3);
+    }
+
+    #[test]
+    fn test_get_num_deletion_variatns() {
+        let result = get_num_deletion_variants(5, 2);
+        assert_eq!(result, 1 + 5 + 10);
     }
 }
