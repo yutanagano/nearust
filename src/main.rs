@@ -1,5 +1,5 @@
-use std::cmp::min;
-use std::collections::{HashMap, HashSet};
+use rapidfuzz::distance::levenshtein;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::io::{stderr, stdin, stdout, BufReader, BufRead, BufWriter, Error, ErrorKind, Read, Write};
 
 fn main() -> Result<(), Error> {
@@ -25,13 +25,12 @@ fn nearust(
     let threshold: u8 = 1;
 
     let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
-    let max_num_vars: usize = input_strings.iter().map(|s| get_num_deletion_variants(s.len() as u8, 1)).sum();
 
     // Make hash map of all possible substrings that can be generated from input strings via making
     // deletions up to the threshold level, where the keys are the substrings and the values are
     // vectors of indices corresponding to the input strings from which the substrings can be
     // generated.
-    let mut variant_dict: HashMap<Vec<u8>, Vec<usize>> = HashMap::with_capacity(max_num_vars);
+    let mut variant_dict: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
     for (idx, s) in input_strings.iter().enumerate() {
         let variants = get_deletion_variants(s, 1).unwrap();
         for v in variants.iter() {
@@ -41,8 +40,7 @@ fn nearust(
     }
 
     // iterate through the hashmap generated above and collect all candidates for hits
-    let max_num_hit_candidates: usize = variant_dict.iter().map(|(_, inds)| inds.len() * (inds.len() - 1) / 2).sum();
-    let mut hit_candidates: HashSet<(usize, usize)> = HashSet::with_capacity(max_num_hit_candidates);
+    let mut hit_candidates: HashSet<(usize, usize)> = HashSet::default();
     for (_, indices) in variant_dict.iter() {
         let combs = match get_k_combinations(indices.len(), 2) {
             Ok(v) => v,
@@ -65,15 +63,15 @@ fn nearust(
         let anchor = &input_strings[hit_candidate.0];
         let comparison = &input_strings[hit_candidate.1];
 
-        if anchor.len() > comparison.len() && anchor.len() - comparison.len() < threshold as usize && levenshtein(anchor, comparison) > threshold {
+        if anchor.len() > comparison.len() && anchor.len() - comparison.len() < threshold as usize && levenshtein::distance(anchor, comparison) > threshold as usize {
             continue
         }
 
-        if anchor.len() < comparison.len() && comparison.len() - anchor.len() < threshold as usize && levenshtein(anchor, comparison) > threshold {
+        if anchor.len() < comparison.len() && comparison.len() - anchor.len() < threshold as usize && levenshtein::distance(anchor, comparison) > threshold as usize {
             continue
         }
 
-        if anchor.len() == comparison.len() && levenshtein(anchor, comparison) > threshold {
+        if anchor.len() == comparison.len() && levenshtein::distance(anchor, comparison) > threshold as usize {
             continue
         }
 
@@ -104,26 +102,6 @@ fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error>
     Ok(strings)
 }
 
-fn get_num_deletion_variants(input_len: u8, max_deletions: u8) -> usize {
-    let input_len = input_len as usize;
-    let max_deletions = max_deletions as usize;
-    let mut total_num_variants = 0;
-
-    for num_dels in 0..=max_deletions {
-        if num_dels == 0 {
-            total_num_variants += 1;
-            continue
-        }
-
-        let num_perms: usize = (input_len-num_dels+1..=input_len).product();
-        let num_orderings: usize = (1..=num_dels).product();
-        let num_combinations = num_perms / num_orderings;
-        total_num_variants += num_combinations;
-    }
-
-    total_num_variants
-}
-
 fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<u8>>, Error> {
     // Given an input string, generate all possible strings after making at most max_deletions
     // single-character deletions.
@@ -137,7 +115,7 @@ fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<
         return Err(Error::new(ErrorKind::InvalidInput, "Input strings longer than 255 characters are unsupported"))
     }
 
-    let mut deletion_variants = HashSet::new();
+    let mut deletion_variants = HashSet::default();
     deletion_variants.insert(input.to_vec());
 
     for num_deletions in 1..=max_deletions {
@@ -193,42 +171,9 @@ fn combination_search(n: usize, k: usize, start: usize, current_combination: &mu
     };
 }
 
-fn levenshtein(anchor: &[u8], comparison: &[u8]) -> u8 {
-    let mut dist_row_prev = [0u8; 255];
-    let mut dist_row = [0u8; 255];
-
-    for i in 0..=anchor.len() {
-        dist_row_prev[i] = i as u8;
-    }
-
-    for j in 1..=comparison.len() {
-        dist_row[0] = j as u8;
-
-        for i in 1..=anchor.len() {
-            if anchor[i-1] == comparison[j-1] {
-                dist_row[i] = dist_row_prev[i-1];
-                continue
-            }
-
-            let insertion_cost = dist_row_prev[i] + 1;
-            let deletion_cost = dist_row[i-1] + 1;
-            let substitution_cost = dist_row_prev[i-1] + 1;
-
-            dist_row[i] = min(min(insertion_cost, deletion_cost), substitution_cost);
-        }
-
-        for i in 0..=anchor.len() {
-            dist_row_prev[i] = dist_row[i];
-        }
-    }
-
-    return dist_row[anchor.len()];
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str;
 
     #[test]
     fn test_nearust() {
@@ -239,8 +184,9 @@ mod tests {
 
         let mut out = Vec::new();
         let mut err = Vec::new();
-        nearust(&mut "fizz\nfuzz\nbuzz".as_bytes(), &mut out, &mut err).unwrap();
-        assert_eq!(str::from_utf8(&out).unwrap(), "0,1\n1,2\n");
+        nearust(&mut "fizz\nfuzz\nfuzzy".as_bytes(), &mut out, &mut err).unwrap();
+        let is_expected = out == b"0,1\n1,2\n" || out == b"1,2\n0,1\n";
+        assert!(is_expected);
     }
 
     #[test]
@@ -267,34 +213,19 @@ mod tests {
     #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants(b"foo", 1).unwrap();
-        let mut expected = HashSet::new();
+        let mut expected = HashSet::default();
         expected.insert("foo".into());
         expected.insert("fo".into());
         expected.insert("oo".into());
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants(b"foo", 2).unwrap();
-        let mut expected = HashSet::new();
+        let mut expected = HashSet::default();
         expected.insert("foo".into());
         expected.insert("fo".into());
         expected.insert("oo".into());
         expected.insert("f".into());
         expected.insert("o".into());
         assert_eq!(variants, expected);
-    }
-
-    #[test]
-    fn test_levenshtein() {
-        let result = levenshtein(b"foo", b"bar");
-        assert_eq!(result, 3);
-
-        let result = levenshtein(b"kitten", b"sitting");
-        assert_eq!(result, 3);
-    }
-
-    #[test]
-    fn test_get_num_deletion_variatns() {
-        let result = get_num_deletion_variants(5, 2);
-        assert_eq!(result, 1 + 5 + 10);
     }
 }
