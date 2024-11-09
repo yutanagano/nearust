@@ -1,8 +1,10 @@
 use rapidfuzz::distance::levenshtein;
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::{stdin, stdout, BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 
 fn main() -> Result<(), Error> {
+    // rayon::ThreadPoolBuilder::new().num_threads(16).build_global().unwrap();
     nearust(stdin(), stdout())
 }
 
@@ -21,12 +23,12 @@ fn nearust(
     // The function accepts the three aforementioned streams as parameters instead of having them
     // directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
     // easily bound to other buffers for the purposes of testing.
-    let threshold = 1;
+    let max_edits = 1;
 
     let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
-    let variant_lookup_table = get_variant_lookup_table(&input_strings, threshold);
+    let variant_lookup_table = get_variant_lookup_table(&input_strings, max_edits);
     let hit_candidates = get_hit_candidates(&variant_lookup_table);
-    write_true_hits(&hit_candidates, &input_strings, threshold, out_stream);
+    write_true_hits(&hit_candidates, &input_strings, max_edits, out_stream);
 
     Ok(())
 }
@@ -162,23 +164,21 @@ fn write_true_hits(hit_candidates: &FxHashSet<(usize, usize)>, strings: &[Vec<u8
 
     let mut writer = BufWriter::new(out_stream);
 
-    for hit_candidate in hit_candidates.iter() {
-        let anchor_idx = hit_candidate.0;
-        let comparison_idx = hit_candidate.1;
+    let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
+        let anchor = &strings[*anchor_idx];
+        let comparison = &strings[*comparison_idx];
+        let dist = if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
+                      (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
+            max_edits
+        } else {
+            levenshtein::distance(anchor, comparison)
+        };
 
-        let anchor = &strings[hit_candidate.0];
-        let comparison = &strings[hit_candidate.1];
+        (*anchor_idx, *comparison_idx, dist)
+    }).collect();
 
-        if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
-            (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
-            write!(&mut writer, "{anchor_idx},{comparison_idx},{max_edits}\n").unwrap();
-            continue
-        }
-
-        let dist = levenshtein::distance(anchor, comparison);
-        if dist <= max_edits {
-            write!(&mut writer, "{anchor_idx},{comparison_idx},{dist}\n").unwrap();
-        }
+    for (a_idx, c_idx, dist) in true_hits.iter().filter(|(_,_,d)| *d <= max_edits) {
+        write!(&mut writer, "{a_idx},{c_idx},{dist}\n").unwrap();
     }
 }
 
