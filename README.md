@@ -10,19 +10,19 @@
 - `stdin` is read until EOF signal is reached
 - The output is also in plain text and directed to `stdout`
 - Every line in the output represents a hit (pair of strings within threshold distance)
-- A hit is encoded in terms of the 0-indexed indices of the strings involved, separated by a comma, where the lower index is always first
+- A hit is encoded in terms of three values: the first two values are the 0-indexed indices of the strings involved, where the lower index is always first, and the third value is the levenshtein distance between those two strings (these three numbers are separated with a comma)
 
 Examples:
 
 ```bash
 $ echo $'foo\nbar\nbaz' | nearust
-1,2
+1,2,1
 ```
 
 ```bash
 $ echo $'fizz\nfuzz\nbuzz' | nearust
-0,1
-1,2
+0,1,1
+1,2,1
 ```
 
 ### Future plans / extensions
