@@ -1,15 +1,14 @@
 use rapidfuzz::distance::levenshtein;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::io::{stderr, stdin, stdout, BufReader, BufRead, BufWriter, Error, ErrorKind, Read, Write};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::io::{stdin, stdout, BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 
 fn main() -> Result<(), Error> {
-    nearust(stdin(), stdout(), stderr())
+    nearust(stdin(), stdout())
 }
 
 fn nearust(
     in_stream: impl Read, 
     out_stream: impl Write, 
-    mut _err_stream: impl Write
 ) -> Result<(), Error> {
     // Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
     // Strings where each String is a line from in_stream. Performs symdel to look for String
@@ -22,61 +21,12 @@ fn nearust(
     // The function accepts the three aforementioned streams as parameters instead of having them
     // directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
     // easily bound to other buffers for the purposes of testing.
-    let threshold: u8 = 1;
+    let threshold = 1;
 
     let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
-
-    // Make hash map of all possible substrings that can be generated from input strings via making
-    // deletions up to the threshold level, where the keys are the substrings and the values are
-    // vectors of indices corresponding to the input strings from which the substrings can be
-    // generated.
-    let mut variant_dict: HashMap<Vec<u8>, Vec<usize>> = HashMap::default();
-    for (idx, s) in input_strings.iter().enumerate() {
-        let variants = get_deletion_variants(s, 1).unwrap();
-        for v in variants.iter() {
-            let entry = variant_dict.entry(v.clone()).or_default();
-            entry.push(idx);
-        }
-    }
-
-    // iterate through the hashmap generated above and collect all candidates for hits
-    let mut hit_candidates: HashSet<(usize, usize)> = HashSet::default();
-    for (_, indices) in variant_dict.iter() {
-        let combs = match get_k_combinations(indices.len(), 2) {
-            Ok(v) => v,
-            Err(_) => continue
-        };
-        for pair in combs.iter().map(|comb| {
-            (indices[comb[0]], indices[comb[1]])
-        }) {
-            hit_candidates.insert(pair);
-        }
-    }
-
-    // Examine and double check hits to see if they are real (this will require an 
-    // implementation of Levenshtein distance)
-    let mut writer = BufWriter::new(out_stream);
-    for hit_candidate in hit_candidates.iter() {
-        let anchor_idx = hit_candidate.0;
-        let comparison_idx = hit_candidate.1;
-
-        let anchor = &input_strings[hit_candidate.0];
-        let comparison = &input_strings[hit_candidate.1];
-
-        if anchor.len() > comparison.len() && anchor.len() - comparison.len() < threshold as usize && levenshtein::distance(anchor, comparison) > threshold as usize {
-            continue
-        }
-
-        if anchor.len() < comparison.len() && comparison.len() - anchor.len() < threshold as usize && levenshtein::distance(anchor, comparison) > threshold as usize {
-            continue
-        }
-
-        if anchor.len() == comparison.len() && levenshtein::distance(anchor, comparison) > threshold as usize {
-            continue
-        }
-
-        write!(&mut writer, "{anchor_idx},{comparison_idx}\n").unwrap();
-    }
+    let variant_lookup_table = get_variant_lookup_table(&input_strings, threshold);
+    let hit_candidates = get_hit_candidates(&variant_lookup_table);
+    write_true_hits(&hit_candidates, &input_strings, threshold, out_stream);
 
     Ok(())
 }
@@ -102,29 +52,44 @@ fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error>
     Ok(strings)
 }
 
-fn get_deletion_variants(input: &[u8], max_deletions: u8) -> Result<HashSet<Vec<u8>>, Error> {
+fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<Vec<u8>, Vec<usize>> {
+    // Make hash map of all possible substrings that can be generated from input strings via making
+    // deletions up to the threshold level, where the keys are the substrings and the values are
+    // vectors of indices corresponding to the input strings from which the substrings can be
+    // generated.
+
+    let mut variant_dict: FxHashMap<Vec<u8>, Vec<usize>> = FxHashMap::default();
+
+    for (idx, s) in strings.iter().enumerate() {
+        let variants = get_deletion_variants(s, max_edits).unwrap();
+        for v in variants.iter() {
+            let entry = variant_dict.entry(v.clone()).or_default();
+            entry.push(idx);
+        }
+    }
+
+    variant_dict
+}
+
+fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<FxHashSet<Vec<u8>>, Error> {
     // Given an input string, generate all possible strings after making at most max_deletions
     // single-character deletions.
-
-    if max_deletions > 2 {
-        return Err(Error::new(ErrorKind::InvalidInput, "Thresholds above 2 edit distance are unsupported"))
-    }
 
     let input_length = input.len();
     if input_length > 255 {
         return Err(Error::new(ErrorKind::InvalidInput, "Input strings longer than 255 characters are unsupported"))
     }
 
-    let mut deletion_variants = HashSet::default();
+    let mut deletion_variants = FxHashSet::default();
     deletion_variants.insert(input.to_vec());
 
     for num_deletions in 1..=max_deletions {
-        if num_deletions > input_length as u8 {
+        if num_deletions > input_length {
             deletion_variants.insert(Vec::new());
             break
         }
 
-        for deletion_indices in get_k_combinations(input_length, num_deletions as usize)? {
+        for deletion_indices in get_k_combinations(input_length, num_deletions)? {
             let mut variant = Vec::new();
             let mut offset = 0;
 
@@ -171,6 +136,52 @@ fn combination_search(n: usize, k: usize, start: usize, current_combination: &mu
     };
 }
 
+fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> FxHashSet<(usize, usize)> {
+    // iterate through the hashmap generated above and collect all candidates for hits
+
+    let mut hit_candidates: FxHashSet<(usize, usize)> = FxHashSet::default();
+
+    for (_, indices) in variant_lookup_table.iter() {
+        let combs = match get_k_combinations(indices.len(), 2) {
+            Ok(v) => v,
+            Err(_) => continue
+        };
+        for pair in combs.iter().map(|comb| {
+            (indices[comb[0]], indices[comb[1]])
+        }) {
+            hit_candidates.insert(pair);
+        }
+    }
+
+    hit_candidates
+}
+
+fn write_true_hits(hit_candidates: &FxHashSet<(usize, usize)>, strings: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
+    // Examine and double check hits to see if they are real (this will require an 
+    // implementation of Levenshtein distance)
+
+    let mut writer = BufWriter::new(out_stream);
+
+    for hit_candidate in hit_candidates.iter() {
+        let anchor_idx = hit_candidate.0;
+        let comparison_idx = hit_candidate.1;
+
+        let anchor = &strings[hit_candidate.0];
+        let comparison = &strings[hit_candidate.1];
+
+        if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
+            (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
+            write!(&mut writer, "{anchor_idx},{comparison_idx},{max_edits}\n").unwrap();
+            continue
+        }
+
+        let dist = levenshtein::distance(anchor, comparison);
+        if dist <= max_edits {
+            write!(&mut writer, "{anchor_idx},{comparison_idx},{dist}\n").unwrap();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,14 +189,12 @@ mod tests {
     #[test]
     fn test_nearust() {
         let mut out = Vec::new();
-        let mut err = Vec::new();
-        nearust(&mut "foo\nbar\nbaz".as_bytes(), &mut out, &mut err).unwrap();
-        assert_eq!(out, b"1,2\n");
+        nearust(&mut "foo\nbar\nbaz".as_bytes(), &mut out).unwrap();
+        assert_eq!(out, b"1,2,1\n");
 
         let mut out = Vec::new();
-        let mut err = Vec::new();
-        nearust(&mut "fizz\nfuzz\nfuzzy".as_bytes(), &mut out, &mut err).unwrap();
-        let is_expected = out == b"0,1\n1,2\n" || out == b"1,2\n0,1\n";
+        nearust(&mut "fizz\nfuzz\nfuzzy".as_bytes(), &mut out).unwrap();
+        let is_expected = out == b"0,1,1\n1,2,1\n" || out == b"1,2,1\n0,1,1\n";
         assert!(is_expected);
     }
 
@@ -213,14 +222,14 @@ mod tests {
     #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants(b"foo", 1).unwrap();
-        let mut expected = HashSet::default();
+        let mut expected = FxHashSet::default();
         expected.insert("foo".into());
         expected.insert("fo".into());
         expected.insert("oo".into());
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants(b"foo", 2).unwrap();
-        let mut expected = HashSet::default();
+        let mut expected = FxHashSet::default();
         expected.insert("foo".into());
         expected.insert("fo".into());
         expected.insert("oo".into());
