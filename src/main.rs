@@ -1,6 +1,6 @@
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::io::{stdin, stdout, BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 use std::sync::mpsc;
 
@@ -64,16 +64,16 @@ fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<
 
     for (idx, s) in strings.iter().enumerate() {
         let variants = get_deletion_variants(s, max_edits).unwrap();
-        for v in variants.iter() {
-            let entry = variant_dict.entry(v.clone()).or_default();
+        for variant in variants.iter() {
+            let entry = variant_dict.entry(variant.clone()).or_default();
             entry.push(idx);
         }
-    }
+    };
 
     variant_dict
 }
 
-fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<FxHashSet<Vec<u8>>, Error> {
+fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<Vec<Vec<u8>>, Error> {
     // Given an input string, generate all possible strings after making at most max_deletions
     // single-character deletions.
 
@@ -82,12 +82,12 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<FxHashSet
         return Err(Error::new(ErrorKind::InvalidInput, "Input strings longer than 255 characters are unsupported"))
     }
 
-    let mut deletion_variants = FxHashSet::default();
-    deletion_variants.insert(input.to_vec());
+    let mut deletion_variants = Vec::new();
+    deletion_variants.push(input.to_vec());
 
     for num_deletions in 1..=max_deletions {
         if num_deletions > input_length {
-            deletion_variants.insert(Vec::new());
+            deletion_variants.push(Vec::new());
             break
         }
 
@@ -101,9 +101,12 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<FxHashSet
             }
             variant.extend(&input[offset..input_length]);
 
-            deletion_variants.insert(variant);
+            deletion_variants.push(variant);
         }
     }
+
+    deletion_variants.sort_unstable();
+    deletion_variants.dedup();
 
     Ok(deletion_variants)
 }
@@ -231,19 +234,19 @@ mod tests {
     #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants(b"foo", 1).unwrap();
-        let mut expected = FxHashSet::default();
-        expected.insert("foo".into());
-        expected.insert("fo".into());
-        expected.insert("oo".into());
+        let mut expected: Vec<Vec<u8>> = Vec::new();
+        expected.push("fo".into());
+        expected.push("foo".into());
+        expected.push("oo".into());
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants(b"foo", 2).unwrap();
-        let mut expected = FxHashSet::default();
-        expected.insert("foo".into());
-        expected.insert("fo".into());
-        expected.insert("oo".into());
-        expected.insert("f".into());
-        expected.insert("o".into());
+        let mut expected: Vec<Vec<u8>> = Vec::new();
+        expected.push("f".into());
+        expected.push("fo".into());
+        expected.push("foo".into());
+        expected.push("o".into());
+        expected.push("oo".into());
         assert_eq!(variants, expected);
     }
 }
