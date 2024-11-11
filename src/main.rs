@@ -2,9 +2,9 @@ use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::{stdin, stdout, BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
+use std::sync::mpsc;
 
 fn main() -> Result<(), Error> {
-    // rayon::ThreadPoolBuilder::new().num_threads(16).build_global().unwrap();
     nearust(stdin(), stdout())
 }
 
@@ -138,27 +138,36 @@ fn combination_search(n: usize, k: usize, start: usize, current_combination: &mu
     };
 }
 
-fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> FxHashSet<(usize, usize)> {
+fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> Vec<(usize, usize)> {
     // iterate through the hashmap generated above and collect all candidates for hits
 
-    let mut hit_candidates: FxHashSet<(usize, usize)> = FxHashSet::default();
+    let mut hit_candidates = Vec::new();
+    let (transmitter, receiver) = mpsc::channel();
 
-    for (_, indices) in variant_lookup_table.iter() {
+    variant_lookup_table.par_iter().for_each_with(transmitter, |transmitter, (_, indices)| {
         let combs = match get_k_combinations(indices.len(), 2) {
             Ok(v) => v,
-            Err(_) => continue
+            Err(_) => return
         };
-        for pair in combs.iter().map(|comb| {
+        let pairs: Vec<_> = combs.iter().map(|comb| {
             (indices[comb[0]], indices[comb[1]])
-        }) {
-            hit_candidates.insert(pair);
+        }).collect();
+        transmitter.send(pairs).unwrap();
+    });
+
+    for pairs in receiver {
+        for pair in pairs {
+            hit_candidates.push(pair);
         }
     }
+
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
 
     hit_candidates
 }
 
-fn write_true_hits(hit_candidates: &FxHashSet<(usize, usize)>, strings: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
+fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
     // Examine and double check hits to see if they are real (this will require an 
     // implementation of Levenshtein distance)
 
