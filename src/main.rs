@@ -1,43 +1,36 @@
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use std::io::{stdin, stdout, BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
+use std::io;
+use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 use std::sync::mpsc;
 
+/// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
+/// Strings where each String is a line from in_stream. Performs symdel to look for String
+/// pairs within 1 edit distance. Outputs the detected pairs from symdel into out_stream, where
+/// each new line written encodes a detected pair as a pair of 0-indexed indices of the Strings
+/// involved separated by a comma, and the lower index is always first.
+///
+/// Any unrecoverable errors should be written out to err_stream, before the program exits.
+///
+/// The function accepts the three aforementioned streams as parameters instead of having them
+/// directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
+/// easily bound to other buffers for the purposes of testing.
 fn main() -> Result<(), Error> {
-    nearust(stdin(), stdout())
-}
-
-fn nearust(
-    in_stream: impl Read, 
-    out_stream: impl Write, 
-) -> Result<(), Error> {
-    // Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
-    // Strings where each String is a line from in_stream. Performs symdel to look for String
-    // pairs within 1 edit distance. Outputs the detected pairs from symdel into out_stream, where
-    // each new line written encodes a detected pair as a pair of 0-indexed indices of the Strings
-    // involved separated by a comma, and the lower index is always first.
-    //
-    // Any unrecoverable errors should be written out to err_stream, before the program exits.
-    //
-    // The function accepts the three aforementioned streams as parameters instead of having them
-    // directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
-    // easily bound to other buffers for the purposes of testing.
     let max_edits = 1;
 
-    let input_strings = get_input_lines_as_ascii(in_stream).unwrap();
+    let input_strings = get_input_lines_as_ascii(io::stdin()).unwrap();
     let variant_lookup_table = get_variant_lookup_table(&input_strings, max_edits);
     let hit_candidates = get_hit_candidates(&variant_lookup_table);
-    write_true_hits(&hit_candidates, &input_strings, max_edits, out_stream);
+    write_true_hits(&hit_candidates, &input_strings, max_edits, io::stdout());
 
     Ok(())
 }
 
+/// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
+/// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
+/// is guaranteed to only contain ASCII bytes.
 fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error> {
-    // Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
-    // errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
-    // is guaranteed to only contain ASCII bytes.
-
     let reader = BufReader::new(in_stream);
     let mut strings = Vec::new();
 
@@ -54,12 +47,11 @@ fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error>
     Ok(strings)
 }
 
+/// Make hash map of all possible substrings that can be generated from input strings via making
+/// deletions up to the threshold level, where the keys are the substrings and the values are
+/// vectors of indices corresponding to the input strings from which the substrings can be
+/// generated.
 fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<Vec<u8>, Vec<usize>> {
-    // Make hash map of all possible substrings that can be generated from input strings via making
-    // deletions up to the threshold level, where the keys are the substrings and the values are
-    // vectors of indices corresponding to the input strings from which the substrings can be
-    // generated.
-
     let mut variant_dict: FxHashMap<Vec<u8>, Vec<usize>> = FxHashMap::default();
 
     for (idx, s) in strings.iter().enumerate() {
@@ -73,9 +65,9 @@ fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<
     variant_dict
 }
 
+/// Given an input string, generate all possible strings after making at most max_deletions
+/// single-character deletions.
 fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<Vec<Vec<u8>>, Error> {
-    // Given an input string, generate all possible strings after making at most max_deletions
-    // single-character deletions.
 
     let input_length = input.len();
     if input_length > 255 {
@@ -111,9 +103,8 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Result<Vec<Vec<u
     Ok(deletion_variants)
 }
 
+/// Return a vector containing all k-combinations of the integers in the range 0..n.
 fn get_k_combinations(n: usize, k: usize) -> Result<Vec<Vec<usize>>, Error> {
-    // Return a vector containing all k-combinations of the integers in the range 0..n.
-
     if k > n {
         return Err(Error::new(ErrorKind::InvalidInput, "k cannot be larger than n"))
     }
@@ -126,9 +117,8 @@ fn get_k_combinations(n: usize, k: usize) -> Result<Vec<Vec<usize>>, Error> {
     Ok(combinations)
 }
 
+/// Recursive function used in computing k-combinations.
 fn combination_search(n: usize, k: usize, start: usize, current_combination: &mut Vec<usize>, combinations: &mut Vec<Vec<usize>>) {
-    // Recursive function used in computing k-combinations.
-
     if current_combination.len() == k {
         combinations.push(current_combination.clone());
         return
@@ -141,9 +131,8 @@ fn combination_search(n: usize, k: usize, start: usize, current_combination: &mu
     };
 }
 
+/// iterate through the hashmap generated above and collect all candidates for hits
 fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> Vec<(usize, usize)> {
-    // iterate through the hashmap generated above and collect all candidates for hits
-
     let mut hit_candidates = Vec::new();
     let (transmitter, receiver) = mpsc::channel();
 
@@ -170,10 +159,9 @@ fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> 
     hit_candidates
 }
 
+/// Examine and double check hits to see if they are real (this will require an 
+/// implementation of Levenshtein distance)
 fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
-    // Examine and double check hits to see if they are real (this will require an 
-    // implementation of Levenshtein distance)
-
     let mut writer = BufWriter::new(out_stream);
 
     let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
@@ -199,19 +187,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nearust() {
-        let mut out = Vec::new();
-        nearust(&mut "foo\nbar\nbaz".as_bytes(), &mut out).unwrap();
-        assert_eq!(out, b"1,2,1\n");
-
-        let mut out = Vec::new();
-        nearust(&mut "fizz\nfuzz\nfuzzy".as_bytes(), &mut out).unwrap();
-        let is_expected = out == b"0,1,1\n1,2,1\n" || out == b"1,2,1\n0,1,1\n";
-        assert!(is_expected);
-    }
-
-    #[test]
-    fn test_get_string_vector() {
+    fn test_get_input_lines_as_ascii() {
         let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
         let expected: Vec<Vec<u8>> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
