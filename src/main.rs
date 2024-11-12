@@ -1,9 +1,19 @@
+use clap::Parser;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 use std::sync::mpsc;
+
+/// Minimal CLI utility for fast detection of similar strings using the symdel algorithm.
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// The maximum number of edits away to check for neighbours.
+    #[arg(short, long, default_value_t = 1)]
+    max_edits: usize,
+}
 
 /// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
 /// Strings where each String is a line from in_stream. Performs symdel to look for String
@@ -16,15 +26,15 @@ use std::sync::mpsc;
 /// The function accepts the three aforementioned streams as parameters instead of having them
 /// directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
 /// easily bound to other buffers for the purposes of testing.
-fn main() -> Result<(), Error> {
-    let max_edits = 1;
+fn main() {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let args = Args::parse();
 
-    let input_strings = get_input_lines_as_ascii(io::stdin()).unwrap();
-    let variant_lookup_table = get_variant_lookup_table(&input_strings, max_edits);
+    let input_strings = get_input_lines_as_ascii(stdin).unwrap();
+    let variant_lookup_table = get_variant_lookup_table(&input_strings, args.max_edits);
     let hit_candidates = get_hit_candidates(&variant_lookup_table);
-    write_true_hits(&hit_candidates, &input_strings, max_edits, io::stdout());
-
-    Ok(())
+    write_true_hits(&hit_candidates, &input_strings, args.max_edits, stdout);
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
