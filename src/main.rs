@@ -10,7 +10,7 @@ use std::sync::mpsc;
 ///
 /// The program reads from the standard input until an EOF signal is reached, where each new line
 /// is considered to represent a distinct input string. All input must be valid ASCII. The program
-/// detects all pairs of input strings that are at most <MAX EDITS> edits away from one another,
+/// detects all pairs of input strings that are at most <MAX_DISTANCE> edits away from one another,
 /// and prints them out to standard output. Each line in the program's output contains three
 /// integers separated with a comma, where the first two integers represent the (0-indexed) line
 /// numbers in the input data corresponding to the two neighbour strings, and the third number
