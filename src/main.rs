@@ -7,12 +7,22 @@ use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 use std::sync::mpsc;
 
 /// Minimal CLI utility for fast detection of similar strings using the symdel algorithm.
+///
+/// The program reads from the standard input until an EOF signal is reached, where each new line
+/// is considered to represent a distinct input string. All input must be valid ASCII. The program
+/// detects all pairs of input strings that are at most <MAX EDITS> edits away from one another,
+/// and prints them out to standard output. Each line in the program's output contains three
+/// integers separated with a comma, where the first two integers represent the (0-indexed) line
+/// numbers in the input data corresponding to the two neighbour strings, and the third number
+/// corresponds to the number of edits (Levenshtein distance) between them.
+///
+/// Example: echo $'fizz\nfuzz\nbuzz' | nearust -d 2
 #[derive(Debug, Parser)]
-#[command(version, about, long_about = None)]
+#[command(version)]
 struct Args {
-    /// The maximum number of edits away to check for neighbours.
-    #[arg(short, long, default_value_t = 1)]
-    max_edits: usize,
+    /// The maximum (Levenshtein) edit distance away to check for neighbours.
+    #[arg(short='d', long, default_value_t = 1)]
+    max_distance: usize,
 }
 
 /// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
@@ -22,19 +32,15 @@ struct Args {
 /// involved separated by a comma, and the lower index is always first.
 ///
 /// Any unrecoverable errors should be written out to err_stream, before the program exits.
-///
-/// The function accepts the three aforementioned streams as parameters instead of having them
-/// directly bound to stdin, stdout and stderr respectively. This is so that the streams can be
-/// easily bound to other buffers for the purposes of testing.
 fn main() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let args = Args::parse();
 
     let input_strings = get_input_lines_as_ascii(stdin).unwrap();
-    let variant_lookup_table = get_variant_lookup_table(&input_strings, args.max_edits);
+    let variant_lookup_table = get_variant_lookup_table(&input_strings, args.max_distance);
     let hit_candidates = get_hit_candidates(&variant_lookup_table);
-    write_true_hits(&hit_candidates, &input_strings, args.max_edits, stdout);
+    write_true_hits(&hit_candidates, &input_strings, args.max_distance, stdout);
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
