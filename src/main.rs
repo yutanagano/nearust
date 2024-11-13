@@ -7,7 +7,8 @@ use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
 use std::sync::mpsc;
 
-/// Minimal CLI utility for fast detection of similar strings using the symdel algorithm.
+/// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
+/// threshold edit distance.
 ///
 /// The program reads from the standard input until an EOF signal is reached, where each new line
 /// is considered to represent a distinct input string. All input must be valid ASCII. The program
@@ -17,7 +18,7 @@ use std::sync::mpsc;
 /// line numbers in the input data corresponding to the two neighbour strings, and the third number
 /// corresponds to the number of edits (Levenshtein distance) between them.
 ///
-/// Example: echo $'fizz\nfuzz\nbuzz' | nearust -d 2
+/// Example: echo $'fizz\nfuzz\nbuzz' | nearust -d 2 > results.txt
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Args {
