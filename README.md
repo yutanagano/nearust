@@ -6,19 +6,19 @@ It is a fast, multi-threaded, CPU-based implementation of Chotisorayuth and Maye
 The program reads from the standard input until an EOF signal is reached, where each new line is considered to represent a distinct input string. 
 All input must be valid ASCII.
 The program detects all pairs of input strings that are at most <MAX_DISTANCE> (default=1) edits away from one another, and prints them out in plain text to standard output.
-Each line in the program's output contains three eintegers separated with a comma, where the first two integers represent the (0-indexed) line numbers in the input data corresponding to the two neighbour strings, and the third number corresponds to the number of edits (Levenshtein distance) between them.
+Each line in the program's output contains three eintegers separated with a comma, where the first two integers represent the (1-indexed) line numbers in the input data corresponding to the two neighbour strings, and the third number corresponds to the number of edits (Levenshtein distance) between them.
 
 Examples:
 
 ```bash
 $ echo $'foo\nbar\nbaz' | nearust
-1,2,1
+2,3,1
 ```
 
 ```bash
 $ echo $'fizz\nfuzz\nbuzz' | nearust
-0,1,1
 1,2,1
+2,3,1
 ```
 
 ## Future plans / extensions
