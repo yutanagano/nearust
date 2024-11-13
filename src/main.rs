@@ -1,6 +1,6 @@
 use clap::Parser;
 use rapidfuzz::distance::levenshtein;
-use rayon::prelude::*;
+use rayon::{prelude::*, ThreadPoolBuilder};
 use rustc_hash::FxHashMap;
 use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
@@ -10,10 +10,10 @@ use std::sync::mpsc;
 ///
 /// The program reads from the standard input until an EOF signal is reached, where each new line
 /// is considered to represent a distinct input string. All input must be valid ASCII. The program
-/// detects all pairs of input strings that are at most <MAX_DISTANCE> edits away from one another,
-/// and prints them out to standard output. Each line in the program's output contains three
-/// integers separated with a comma, where the first two integers represent the (0-indexed) line
-/// numbers in the input data corresponding to the two neighbour strings, and the third number
+/// detects all pairs of input strings that are at most <MAX_DISTANCE> (default=1) edits away from
+/// one another, and prints them out to standard output. Each line in the program's output contains
+/// three eintegers separated with a comma, where the first two integers represent the (0-indexed)
+/// line numbers in the input data corresponding to the two neighbour strings, and the third number
 /// corresponds to the number of edits (Levenshtein distance) between them.
 ///
 /// Example: echo $'fizz\nfuzz\nbuzz' | nearust -d 2
@@ -23,6 +23,11 @@ struct Args {
     /// The maximum (Levenshtein) edit distance away to check for neighbours.
     #[arg(short='d', long, default_value_t = 1)]
     max_distance: usize,
+
+    /// The number of OS threads the program spawns, which by default is one per CPU core
+    /// available.
+    #[arg(long)]
+    num_threads: Option<usize>,
 }
 
 /// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
@@ -36,6 +41,10 @@ fn main() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let args = Args::parse();
+
+    if let Some(n) = args.num_threads {
+        ThreadPoolBuilder::new().num_threads(n).build_global().unwrap();
+    }
 
     let input_strings = get_input_lines_as_ascii(stdin).unwrap();
     let variant_lookup_table = get_variant_lookup_table(&input_strings, args.max_distance);
