@@ -1,4 +1,5 @@
 use clap::Parser;
+use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use rustc_hash::FxHashMap;
@@ -77,15 +78,31 @@ fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error>
 /// vectors of indices corresponding to the input strings from which the substrings can be
 /// generated.
 fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<Vec<u8>, Vec<usize>> {
-    let mut variant_dict: FxHashMap<Vec<u8>, Vec<usize>> = FxHashMap::default();
+    let mut variant_index_pairs = Vec::new();
+    let (transmitter, receiver) = mpsc::channel();
 
-    for (idx, s) in strings.iter().enumerate() {
+    strings.par_iter().enumerate().for_each_with(transmitter, |transmitter, (idx, s)| {
         let variants = get_deletion_variants(s, max_edits).unwrap();
-        for variant in variants.iter() {
-            let entry = variant_dict.entry(variant.clone()).or_default();
-            entry.push(idx);
+        transmitter.send((idx, variants)).unwrap();
+    });
+
+    for (idx, mut variants) in receiver {
+        for variant in variants.drain(..) {
+            variant_index_pairs.push((variant, idx));
         }
-    };
+    }
+
+    variant_index_pairs.par_sort_unstable();
+
+    let mut variant_dict: FxHashMap<Vec<u8>, Vec<usize>> = FxHashMap::default();
+    for (variant, indices) in &variant_index_pairs.iter().chunk_by(|el| &el.0) {
+        let indices_vector = indices.into_iter().map(|(_, idx)| *idx).collect_vec();
+        if indices_vector.len() == 1 {
+            continue
+        }
+
+        variant_dict.insert(variant.clone(), indices_vector);
+    }
 
     variant_dict
 }
