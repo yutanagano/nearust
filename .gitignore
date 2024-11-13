@@ -2,4 +2,4 @@
 /perf.data*
 /flamegraph.svg
 /test_files
-/temp.txt
+/*.txt
