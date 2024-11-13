@@ -14,7 +14,7 @@ use std::sync::mpsc;
 /// is considered to represent a distinct input string. All input must be valid ASCII. The program
 /// detects all pairs of input strings that are at most <MAX_DISTANCE> (default=1) edits away from
 /// one another, and prints them out to standard output. Each line in the program's output contains
-/// three eintegers separated with a comma, where the first two integers represent the (1-indexed)
+/// three integers separated with a comma, where the first two integers represent the (1-indexed)
 /// line numbers in the input data corresponding to the two neighbour strings, and the third number
 /// corresponds to the number of edits (Levenshtein distance) between them.
 ///
