@@ -21,7 +21,7 @@ $ echo $'fizz\nfuzz\nbuzz' | nearust
 ```
 
 ```bash
-$ echo $'fizz\nfuzz\nbuzz' | nearust
+$ echo $'fizz\nfuzz\nbuzz' | nearust -d 2
 1,2,1
 1,3,2
 2,3,1
