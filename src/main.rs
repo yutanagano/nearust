@@ -93,29 +93,29 @@ fn get_file_bufreader(path: &str) -> BufReader<File> {
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
 /// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
 /// is guaranteed to only contain ASCII bytes.
-fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<Vec<u8>>, Error> {
+fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
     let mut strings = Vec::new();
 
     for (idx, line) in in_stream.lines().enumerate() {
-        let line_as_bytes = line?.into_bytes();
+        let line_unwrapped = line?;
 
-        if !line_as_bytes.is_ascii() {
+        if !line_unwrapped.is_ascii() {
             let err_msg = format!("input line {}: contains non-ASCII data", idx+1);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
         
-        if line_as_bytes.len() > 255 {
+        if line_unwrapped.len() > 255 {
             let err_msg = format!("input line {}: input strings longer than 255 characters are currently not supported", idx+1);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
 
-        strings.push(line_as_bytes);
+        strings.push(line_unwrapped);
     }
 
     Ok(strings)
 }
 
-fn get_hit_candidates(strings: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usize)> {
+fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let mut variant_index_pairs = Vec::new();
     let (transmitter, receiver) = mpsc::channel();
 
@@ -148,7 +148,7 @@ fn get_hit_candidates(strings: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usiz
     hit_candidates
 }
 
-fn get_hit_candidates_cross(strings_primary: &[Vec<u8>], strings_comparison: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usize)> {
+fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let mut variant_index_pairs = Vec::new();
     let (transmitter, receiver) = mpsc::channel();
 
@@ -204,28 +204,27 @@ fn get_hit_candidates_cross(strings_primary: &[Vec<u8>], strings_comparison: &[V
 
 /// Given an input string, generate all possible strings after making at most max_deletions
 /// single-character deletions.
-fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
-
+fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
-    deletion_variants.push(input.to_vec());
+    deletion_variants.push(input.to_string());
 
     for num_deletions in 1..=max_deletions {
         if num_deletions > input_length {
-            deletion_variants.push(Vec::new());
+            deletion_variants.push("".to_string());
             break
         }
         
         for deletion_indices in (0..input_length).combinations(num_deletions) {
-            let mut variant = Vec::new();
+            let mut variant = String::from("");
             let mut offset = 0;
 
             for idx in deletion_indices.iter() {
-                variant.extend(&input[offset..*idx]);
+                variant.push_str(&input[offset..*idx]);
                 offset = idx + 1;
             }
-            variant.extend(&input[offset..input_length]);
+            variant.push_str(&input[offset..input_length]);
 
             deletion_variants.push(variant);
         }
@@ -239,7 +238,7 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
 
 /// Examine and double check hits to see if they are real (this will require an 
 /// implementation of Levenshtein distance)
-fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
+fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_edits: usize, out_stream: impl Write) {
     let mut writer = BufWriter::new(out_stream);
 
     let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
@@ -249,7 +248,7 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_e
                       (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
             max_edits
         } else {
-            levenshtein::distance(anchor, comparison)
+            levenshtein::distance(anchor.chars(), comparison.chars())
         };
 
         (*anchor_idx, *comparison_idx, dist)
@@ -262,7 +261,7 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_e
     }
 }
 
-fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[Vec<u8>], strings_comparison: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
+fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: impl Write) {
     let mut writer = BufWriter::new(out_stream);
 
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
@@ -274,7 +273,7 @@ fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[V
                           (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
                 max_edits
             } else {
-                levenshtein::distance(anchor, comparison)
+                levenshtein::distance(anchor.chars(), comparison.chars())
             };
 
             (*idx_primary, *idx_comparison, dist)
@@ -298,21 +297,21 @@ mod tests {
     #[test]
     fn test_get_input_lines_as_ascii() {
         let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
-        let expected: Vec<Vec<u8>> = vec!["foo".into(), "bar".into(), "baz".into()];
+        let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
     }
 
     #[test]
     fn test_get_deletion_variants() {
-        let variants = get_deletion_variants(b"foo", 1);
-        let mut expected: Vec<Vec<u8>> = Vec::new();
+        let variants = get_deletion_variants("foo", 1);
+        let mut expected: Vec<String> = Vec::new();
         expected.push("fo".into());
         expected.push("foo".into());
         expected.push("oo".into());
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants(b"foo", 2);
-        let mut expected: Vec<Vec<u8>> = Vec::new();
+        let variants = get_deletion_variants("foo", 2);
+        let mut expected: Vec<String> = Vec::new();
         expected.push("f".into());
         expected.push("fo".into());
         expected.push("foo".into());
