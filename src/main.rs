@@ -2,7 +2,6 @@ use clap::Parser;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::{prelude::*, ThreadPoolBuilder};
-use rustc_hash::FxHashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
 use std::sync::mpsc;
@@ -76,12 +75,10 @@ fn main() {
         let comparison_reader = get_file_bufreader(&path);
         let comparison_input = get_input_lines_as_ascii(comparison_reader)
             .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
-
-        let hit_candidates = get_index_pairs_cross(&primary_input, &comparison_input, args.max_distance);
+        let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
         write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, stdout);
     } else {
-        let variant_lookup_table = get_variant_lookup_table(&primary_input, args.max_distance);
-        let hit_candidates = get_hit_candidates(&variant_lookup_table);
+        let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
         write_true_hits(&hit_candidates, &primary_input, args.max_distance, stdout);
     }
 }
@@ -118,7 +115,40 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<Vec<u8>>, Err
     Ok(strings)
 }
 
-fn get_index_pairs_cross(strings_primary: &[Vec<u8>], strings_comparison: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usize)> {
+fn get_hit_candidates(strings: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usize)> {
+    let mut variant_index_pairs = Vec::new();
+    let (transmitter, receiver) = mpsc::channel();
+
+    strings
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter, |transmitter, (idx, s)| {
+            let variants = get_deletion_variants(s, max_edits);
+            transmitter.send((idx, variants)).unwrap();
+        });
+
+    for (idx, mut variants) in receiver {
+        for variant in variants.drain(..) {
+            variant_index_pairs.push((variant, idx));
+        }
+    }
+
+    variant_index_pairs.par_sort_unstable();
+
+    let mut hit_candidates = Vec::new();
+    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(v, _)| v) {
+        indices
+            .map(|(_, idx)| *idx)
+            .combinations(2)
+            .for_each(|v| hit_candidates.push((v[0], v[1])));
+    }
+
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+    hit_candidates
+}
+
+fn get_hit_candidates_cross(strings_primary: &[Vec<u8>], strings_comparison: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usize)> {
     let mut variant_index_pairs = Vec::new();
     let (transmitter, receiver) = mpsc::channel();
 
@@ -172,40 +202,6 @@ fn get_index_pairs_cross(strings_primary: &[Vec<u8>], strings_comparison: &[Vec<
     index_pairs
 }
 
-/// Make hash map of all possible substrings that can be generated from input strings via making
-/// deletions up to the threshold level, where the keys are the substrings and the values are
-/// vectors of indices corresponding to the input strings from which the substrings can be
-/// generated.
-fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<Vec<u8>, Vec<usize>> {
-    let mut variant_index_pairs = Vec::new();
-    let (transmitter, receiver) = mpsc::channel();
-
-    strings.par_iter().enumerate().for_each_with(transmitter, |transmitter, (idx, s)| {
-        let variants = get_deletion_variants(s, max_edits);
-        transmitter.send((idx, variants)).unwrap();
-    });
-
-    for (idx, mut variants) in receiver {
-        for variant in variants.drain(..) {
-            variant_index_pairs.push((variant, idx));
-        }
-    }
-
-    variant_index_pairs.par_sort_unstable();
-
-    let mut variant_dict: FxHashMap<Vec<u8>, Vec<usize>> = FxHashMap::default();
-    for (variant, indices) in &variant_index_pairs.iter().chunk_by(|el| &el.0) {
-        let indices_vector = indices.into_iter().map(|(_, idx)| *idx).collect_vec();
-        if indices_vector.len() == 1 {
-            continue
-        }
-
-        variant_dict.insert(variant.clone(), indices_vector);
-    }
-
-    variant_dict
-}
-
 /// Given an input string, generate all possible strings after making at most max_deletions
 /// single-character deletions.
 fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
@@ -220,8 +216,8 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
             deletion_variants.push(Vec::new());
             break
         }
-
-        for deletion_indices in get_k_combinations(input_length, num_deletions) {
+        
+        for deletion_indices in (0..input_length).combinations(num_deletions) {
             let mut variant = Vec::new();
             let mut offset = 0;
 
@@ -239,60 +235,6 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
     deletion_variants.dedup();
 
     deletion_variants
-}
-
-/// Return a vector containing all k-combinations of the integers in the range 0..n.
-fn get_k_combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
-    assert!(k <= n);
-
-    let mut combinations: Vec<Vec<usize>> = Vec::new();
-    let mut current_combination: Vec<usize> = Vec::new();
-
-    combination_search(n, k, 0, &mut current_combination, &mut combinations);
-
-    combinations
-}
-
-/// Recursive function used in computing k-combinations.
-fn combination_search(n: usize, k: usize, start: usize, current_combination: &mut Vec<usize>, combinations: &mut Vec<Vec<usize>>) {
-    if current_combination.len() == k {
-        combinations.push(current_combination.clone());
-        return
-    };
-
-    for idx in start..n {
-        current_combination.push(idx);
-        combination_search(n, k, idx+1, current_combination, combinations);
-        current_combination.pop();
-    };
-}
-
-/// iterate through the hashmap generated above and collect all candidates for hits
-fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> Vec<(usize, usize)> {
-    let mut hit_candidates = Vec::new();
-    let (transmitter, receiver) = mpsc::channel();
-
-    variant_lookup_table.par_iter().for_each_with(transmitter, |transmitter, (_, indices)| {
-        if indices.len() < 2 {
-            return
-        }
-        let combs = get_k_combinations(indices.len(), 2);
-        let pairs: Vec<_> = combs.iter().map(|comb| {
-            (indices[comb[0]], indices[comb[1]])
-        }).collect();
-        transmitter.send(pairs).unwrap();
-    });
-
-    for pairs in receiver {
-        for pair in pairs {
-            hit_candidates.push(pair);
-        }
-    }
-
-    hit_candidates.par_sort_unstable();
-    hit_candidates.dedup();
-
-    hit_candidates
 }
 
 /// Examine and double check hits to see if they are real (this will require an 
@@ -358,23 +300,6 @@ mod tests {
         let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
         let expected: Vec<Vec<u8>> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
-    }
-
-    #[test]
-    fn test_get_k_combinations() {
-        let combinations = get_k_combinations(3, 2);
-        let expected = vec![
-            vec![0,1],
-            vec![0,2],
-            vec![1,2]
-        ];
-        assert_eq!(combinations, expected);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_get_k_combinations_panics() {
-        let _ = get_k_combinations(2, 3);
     }
 
     #[test]
