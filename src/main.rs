@@ -3,8 +3,7 @@ use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use rustc_hash::FxHashMap;
-use std::io;
-use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
+use std::io::{self, BufRead, BufWriter, Error, ErrorKind, Write};
 use std::sync::mpsc;
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
@@ -39,8 +38,8 @@ struct Args {
 /// detected pair as a pair of 1-indexed line numbers of the input strings involved separated by a
 /// comma, and the lower line number is always first.
 fn main() {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
+    let stdin = io::stdin().lock();
+    let stdout = io::stdout().lock();
     let args = Args::parse();
 
     if let Some(n) = args.num_threads {
@@ -59,11 +58,10 @@ fn main() {
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
 /// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
 /// is guaranteed to only contain ASCII bytes.
-fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error> {
-    let reader = BufReader::new(in_stream);
+fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<Vec<u8>>, Error> {
     let mut strings = Vec::new();
 
-    for (idx, line) in reader.lines().enumerate() {
+    for (idx, line) in in_stream.lines().enumerate() {
         let line_as_bytes = line?.into_bytes();
 
         if !line_as_bytes.is_ascii() {
