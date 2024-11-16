@@ -3,7 +3,8 @@ use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use rustc_hash::FxHashMap;
-use std::io::{self, BufRead, BufWriter, Error, ErrorKind, Write};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
 use std::sync::mpsc;
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
@@ -25,10 +26,22 @@ struct Args {
     #[arg(short='d', long, default_value_t = 1)]
     max_distance: usize,
 
-    /// The number of OS threads the program spawns, which by default is one per CPU core
-    /// available.
-    #[arg(long)]
-    num_threads: Option<usize>,
+    /// The number of OS threads the program spawns (if 0 spawns one thread per CPU core).
+    #[arg(short, long, default_value_t = 0)]
+    num_threads: usize,
+
+    /// Primary input file (if absent program reads from stdin until EOF).
+    file_primary: Option<String>,
+
+    /// If provided, searches for pairs of similar strings between the primary input file and the
+    /// comparison input file.
+    file_comparison: Option<String>
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CrossComparisonIndex {
+    Primary(usize),
+    Comparison(usize),
 }
 
 /// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
@@ -38,21 +51,46 @@ struct Args {
 /// detected pair as a pair of 1-indexed line numbers of the input strings involved separated by a
 /// comma, and the lower line number is always first.
 fn main() {
-    let stdin = io::stdin().lock();
     let stdout = io::stdout().lock();
     let args = Args::parse();
 
-    if let Some(n) = args.num_threads {
-        ThreadPoolBuilder::new().num_threads(n).build_global().unwrap();
-    }
+    ThreadPoolBuilder::new()
+        .num_threads(args.num_threads)
+        .build_global()
+        .unwrap_or_else(|_| panic!("global thread pool cannot be initialised more than once"));
 
-    let input_strings = match get_input_lines_as_ascii(stdin) {
-        Ok(v) => v,
-        Err(e) => panic!("{}", e.to_string()),
+    let primary_input = match args.file_primary {
+        Some(path) => {
+            let reader = get_file_bufreader(&path);
+            get_input_lines_as_ascii(reader)
+                .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()))
+        },
+        None => {
+            let stdin = io::stdin().lock();
+            get_input_lines_as_ascii(stdin)
+                .unwrap_or_else(|e| panic!("(from stdin) {}", e.to_string()))
+        }
     };
-    let variant_lookup_table = get_variant_lookup_table(&input_strings, args.max_distance);
-    let hit_candidates = get_hit_candidates(&variant_lookup_table);
-    write_true_hits(&hit_candidates, &input_strings, args.max_distance, stdout);
+
+    if let Some(path) = args.file_comparison {
+        let comparison_reader = get_file_bufreader(&path);
+        let comparison_input = get_input_lines_as_ascii(comparison_reader)
+            .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
+
+        let hit_candidates = get_index_pairs_cross(&primary_input, &comparison_input, args.max_distance);
+        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, stdout);
+    } else {
+        let variant_lookup_table = get_variant_lookup_table(&primary_input, args.max_distance);
+        let hit_candidates = get_hit_candidates(&variant_lookup_table);
+        write_true_hits(&hit_candidates, &primary_input, args.max_distance, stdout);
+    }
+}
+
+/// Get a buffered reader to a file at path.
+fn get_file_bufreader(path: &str) -> BufReader<File> {
+    let file = File::open(&path)
+        .unwrap_or_else(|e| panic!("failed to open {}: {}", &path, e.to_string()));
+    BufReader::new(file)
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
@@ -78,6 +116,60 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<Vec<u8>>, Err
     }
 
     Ok(strings)
+}
+
+fn get_index_pairs_cross(strings_primary: &[Vec<u8>], strings_comparison: &[Vec<u8>], max_edits: usize) -> Vec<(usize, usize)> {
+    let mut variant_index_pairs = Vec::new();
+    let (transmitter, receiver) = mpsc::channel();
+
+    strings_primary
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter.clone(), |transmitter, (idx, s)| {
+            let variants = get_deletion_variants(s, max_edits);
+            transmitter
+                .send((CrossComparisonIndex::Primary(idx), variants))
+                .unwrap();
+        });
+
+    strings_comparison
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter, |transmitter, (idx, s)| {
+            let variants = get_deletion_variants(s, max_edits);
+            transmitter
+                .send((CrossComparisonIndex::Comparison(idx), variants))
+                .unwrap();
+        });
+
+    for (idx, mut variants) in receiver {
+        for variant in variants.drain(..) {
+            variant_index_pairs.push((variant, idx));
+        }
+    }
+
+    variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+    let mut index_pairs = Vec::new();
+    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(variant, _)| variant) {
+        let mut primary_indices = Vec::new();
+        let mut comparison_indices = Vec::new();
+        
+        indices.for_each(|(_, idx)| {
+            match idx {
+                CrossComparisonIndex::Primary(v) => primary_indices.push(*v),
+                CrossComparisonIndex::Comparison(v) => comparison_indices.push(*v),
+            }
+        });
+
+        for pair in primary_indices.into_iter().cartesian_product(comparison_indices) {
+            index_pairs.push(pair);
+        }
+    }
+
+    index_pairs.par_sort_unstable();
+    index_pairs.dedup();
+    index_pairs
 }
 
 /// Make hash map of all possible substrings that can be generated from input strings via making
@@ -222,6 +314,35 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_e
     }).collect();
 
     for (a_idx, c_idx, dist) in true_hits.iter().filter(|(_,_,d)| *d <= max_edits) {
+        // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
+        // 0-indexed
+        write!(&mut writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
+    }
+}
+
+fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[Vec<u8>], strings_comparison: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
+    let mut writer = BufWriter::new(out_stream);
+
+    let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
+        .par_iter()
+        .map(|(idx_primary, idx_comparison)| {
+            let anchor = &strings_primary[*idx_primary];
+            let comparison = &strings_comparison[*idx_comparison];
+            let dist = if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
+                          (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
+                max_edits
+            } else {
+                levenshtein::distance(anchor, comparison)
+            };
+
+            (*idx_primary, *idx_comparison, dist)
+        })
+        .collect();
+
+    for (a_idx, c_idx, dist) in candidates_with_dist {
+        if dist > max_edits {
+            continue
+        }
         // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
         // 0-indexed
         write!(&mut writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
