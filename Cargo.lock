@@ -151,13 +151,12 @@ dependencies = [
 
 [[package]]
 name = "nearust"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "itertools",
  "rapidfuzz",
  "rayon",
- "rustc-hash",
 ]
 
 [[package]]
@@ -203,12 +202,6 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
 ]
-
-[[package]]
-name = "rustc-hash"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "583034fd73374156e66797ed8e5b0d5690409c9226b22d87cb7f19821c05d152"
 
 [[package]]
 name = "strsim"
