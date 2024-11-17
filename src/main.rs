@@ -207,9 +207,10 @@ fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
 }
 
 fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
-    let mut variant_index_pairs = Vec::new();
+    let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
+    let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
+    let mut variant_index_pairs = Vec::with_capacity(num_vi_primary+num_vi_comparison);
     let (transmitter, receiver) = mpsc::channel();
-
     strings_primary
         .par_iter()
         .enumerate()
@@ -219,7 +220,6 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
                 .send((CrossComparisonIndex::Primary(idx), variants))
                 .unwrap();
         });
-
     strings_comparison
         .par_iter()
         .enumerate()
@@ -238,26 +238,56 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
 
     variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
-    let mut index_pairs = Vec::new();
-    for indices in variant_index_pairs.chunk_by(|(v1, _), (v2, _)| v1 == v2) {
-        let mut primary_indices = Vec::new();
-        let mut comparison_indices = Vec::new();
-        
-        indices.iter().for_each(|(_, idx)| {
-            match idx {
-                CrossComparisonIndex::Primary(v) => primary_indices.push(*v),
-                CrossComparisonIndex::Comparison(v) => comparison_indices.push(*v),
+    let mut convergent_indices = Vec::new();
+    let mut total_num_index_pairs = 0;
+    variant_index_pairs
+        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+        .for_each(|group| {
+            if group.len() == 1 {
+                return
             }
+
+            let mut indices_primary = Vec::new();
+            let mut indices_comparison = Vec::new();
+
+            group.iter().for_each(|(_, idx)| {
+                match idx {
+                    CrossComparisonIndex::Primary(v) => indices_primary.push(*v),
+                    CrossComparisonIndex::Comparison(v) => indices_comparison.push(*v),
+                }
+            });
+
+            let num_index_pairs = indices_primary.len() * indices_comparison.len();
+            if num_index_pairs == 0 {
+                return
+            }
+
+            total_num_index_pairs += num_index_pairs;
+            convergent_indices.push((indices_primary, indices_comparison));
         });
 
-        for pair in primary_indices.into_iter().cartesian_product(comparison_indices) {
-            index_pairs.push(pair);
+    let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
+    let (tx, rx) = mpsc::channel();
+    convergent_indices
+        .par_iter()
+        .for_each_with(tx, |tx, (indices_primary, indices_comparison)| {
+            let pair_tuples = indices_primary
+                .into_iter()
+                .cartesian_product(indices_comparison)
+                .map(|v| (*v.0, *v.1))
+                .collect_vec();
+            tx.send(pair_tuples).unwrap();
+        });
+
+    for pair_tuples in rx {
+        for pair in pair_tuples {
+            hit_candidates.push(pair);
         }
     }
 
-    index_pairs.par_sort_unstable();
-    index_pairs.dedup();
-    index_pairs
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+    hit_candidates
 }
 
 /// Given an input string, generate all possible strings after making at most max_deletions
