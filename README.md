@@ -4,15 +4,29 @@ It is a fast, multi-threaded, CPU-based implementation of Chotisorayuth and Maye
 
 ## Installing
 Check out the latest release to download pre-built binaries for your system.
-The installer script currently does not work since the repository is private.
 
 ## Features
-The program reads from the standard input until an EOF signal is reached, where each new line is considered to represent a distinct input string. 
-All input must be valid ASCII.
-The program detects all pairs of input strings that are at most <MAX_DISTANCE> (default=1) edits away from one another, and prints them out in plain text to standard output.
-Each line in the program's output contains three integers separated with a comma, where the first two integers represent the (1-indexed) line numbers in the input data corresponding to the two neighbour strings, and the third number corresponds to the number of edits (Levenshtein distance) between them.
+If you provide nearust with a path to a `[FILE_PRIAMRY]`, it will read its contents for input.
+If no path is supplied, nearust will read from the standard input until it receives an EOF signal.
+Nearust will then look for pairs of similar strings within its input, where each line of text is treated as an individual string.
+You can also supply nearust with two paths -- a `[FILE_PRIMARY]` and `[FILE_COMPARISON]`, in which case the program will look for pairs of similar strings across the contents of the two files.
+Currently, only valid ASCII input is supported.
 
-Examples:
+By default, the threshold (Levenshtein) edit distance at or below which a pair of strings are considered similar is set at 1.
+This can be changed by setting the `--max-distance` option.
+
+Nearust's output is plain text, where each line encodes a detected pair of similar input strings.
+Each line is comprised of three integers separated by commas, which represent:
+
+| Column        | Value                                                                                                                                                |
+| ---           | ---                                                                                                                                                  |
+| First column  | (1-indexed) line number of the string from the primary input (i.e. `stdin` or `[FILE_PRIMARY]`)                                                      |
+| Second column | (1-indexed) line number of the string from the secondary input (i.e. `stdin` or `[FILE_PRIMARY]` if one input, or `[FILE_COMPARISON]` if two inputs) |
+| Third column  | (Levenshtein) edit distance between the similar strings                                                                                              |
+
+For more help on the CLI options, try `nearust --help`.
+
+### Examples
 
 ```bash
 $ echo $'fizz\nfuzz\nbuzz' | nearust
@@ -27,12 +41,8 @@ $ echo $'fizz\nfuzz\nbuzz' | nearust -d 2
 2,3,1
 ```
 
-For more help on the CLI options, try `nearust --help`.
-
 ## Future plans / extensions
-- Add ability to look for similar strings *across* two different string multisets, not within one. This can be done in a couple of ways:
-    * Specify some special delimiter line that can be put inside the `stdin` input to nearust (e.g. `---`) such that the program will treat everything before it as one multiset and everything after as the second
-    * Add an option to read from files instead of `stdin` e.g. `nearust --anchors file1.txt --comparisons file2.txt`
 - Fancier release infrastructure:
     * Working installer scripts (shell + powershell)
     * Distribute via homebrew
+- Support for wider unicode encodings outside of simple ASCII
