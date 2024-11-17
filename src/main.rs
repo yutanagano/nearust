@@ -2,9 +2,8 @@ use clap::Parser;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::{prelude::*, ThreadPoolBuilder};
-use rustc_hash::FxHashMap;
-use std::io;
-use std::io::{BufRead, BufReader, BufWriter, Error, ErrorKind, Read, Write};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
 use std::sync::mpsc;
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
@@ -26,10 +25,22 @@ struct Args {
     #[arg(short='d', long, default_value_t = 1)]
     max_distance: usize,
 
-    /// The number of OS threads the program spawns, which by default is one per CPU core
-    /// available.
-    #[arg(long)]
-    num_threads: Option<usize>,
+    /// The number of OS threads the program spawns (if 0 spawns one thread per CPU core).
+    #[arg(short, long, default_value_t = 0)]
+    num_threads: usize,
+
+    /// Primary input file (if absent program reads from stdin until EOF).
+    file_primary: Option<String>,
+
+    /// If provided, searches for pairs of similar strings between the primary input file and the
+    /// comparison input file.
+    file_comparison: Option<String>
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CrossComparisonIndex {
+    Primary(usize),
+    Comparison(usize),
 }
 
 /// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
@@ -39,61 +50,82 @@ struct Args {
 /// detected pair as a pair of 1-indexed line numbers of the input strings involved separated by a
 /// comma, and the lower line number is always first.
 fn main() {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
+    let stdout = io::stdout().lock();
     let args = Args::parse();
 
-    if let Some(n) = args.num_threads {
-        ThreadPoolBuilder::new().num_threads(n).build_global().unwrap();
-    }
+    ThreadPoolBuilder::new()
+        .num_threads(args.num_threads)
+        .build_global()
+        .unwrap_or_else(|_| panic!("global thread pool cannot be initialised more than once"));
 
-    let input_strings = match get_input_lines_as_ascii(stdin) {
-        Ok(v) => v,
-        Err(e) => panic!("{}", e.to_string()),
+    let primary_input = match args.file_primary {
+        Some(path) => {
+            let reader = get_file_bufreader(&path);
+            get_input_lines_as_ascii(reader)
+                .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()))
+        },
+        None => {
+            let stdin = io::stdin().lock();
+            get_input_lines_as_ascii(stdin)
+                .unwrap_or_else(|e| panic!("(from stdin) {}", e.to_string()))
+        }
     };
-    let variant_lookup_table = get_variant_lookup_table(&input_strings, args.max_distance);
-    let hit_candidates = get_hit_candidates(&variant_lookup_table);
-    write_true_hits(&hit_candidates, &input_strings, args.max_distance, stdout);
+
+    if let Some(path) = args.file_comparison {
+        let comparison_reader = get_file_bufreader(&path);
+        let comparison_input = get_input_lines_as_ascii(comparison_reader)
+            .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
+        let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
+        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, stdout);
+    } else {
+        let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
+        write_true_hits(&hit_candidates, &primary_input, args.max_distance, stdout);
+    }
+}
+
+/// Get a buffered reader to a file at path.
+fn get_file_bufreader(path: &str) -> BufReader<File> {
+    let file = File::open(&path)
+        .unwrap_or_else(|e| panic!("failed to open {}: {}", &path, e.to_string()));
+    BufReader::new(file)
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
 /// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
 /// is guaranteed to only contain ASCII bytes.
-fn get_input_lines_as_ascii(in_stream: impl Read) -> Result<Vec<Vec<u8>>, Error> {
-    let reader = BufReader::new(in_stream);
+fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
     let mut strings = Vec::new();
 
-    for (idx, line) in reader.lines().enumerate() {
-        let line_as_bytes = line?.into_bytes();
+    for (idx, line) in in_stream.lines().enumerate() {
+        let line_unwrapped = line?;
 
-        if !line_as_bytes.is_ascii() {
+        if !line_unwrapped.is_ascii() {
             let err_msg = format!("input line {}: contains non-ASCII data", idx+1);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
         
-        if line_as_bytes.len() > 255 {
+        if line_unwrapped.len() > 255 {
             let err_msg = format!("input line {}: input strings longer than 255 characters are currently not supported", idx+1);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
 
-        strings.push(line_as_bytes);
+        strings.push(line_unwrapped);
     }
 
     Ok(strings)
 }
 
-/// Make hash map of all possible substrings that can be generated from input strings via making
-/// deletions up to the threshold level, where the keys are the substrings and the values are
-/// vectors of indices corresponding to the input strings from which the substrings can be
-/// generated.
-fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<Vec<u8>, Vec<usize>> {
+fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let mut variant_index_pairs = Vec::new();
     let (transmitter, receiver) = mpsc::channel();
 
-    strings.par_iter().enumerate().for_each_with(transmitter, |transmitter, (idx, s)| {
-        let variants = get_deletion_variants(s, max_edits);
-        transmitter.send((idx, variants)).unwrap();
-    });
+    strings
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter, |transmitter, (idx, s)| {
+            let variants = get_deletion_variants(s, max_edits);
+            transmitter.send((idx, variants)).unwrap();
+        });
 
     for (idx, mut variants) in receiver {
         for variant in variants.drain(..) {
@@ -103,43 +135,96 @@ fn get_variant_lookup_table(strings: &[Vec<u8>], max_edits: usize) -> FxHashMap<
 
     variant_index_pairs.par_sort_unstable();
 
-    let mut variant_dict: FxHashMap<Vec<u8>, Vec<usize>> = FxHashMap::default();
-    for (variant, indices) in &variant_index_pairs.iter().chunk_by(|el| &el.0) {
-        let indices_vector = indices.into_iter().map(|(_, idx)| *idx).collect_vec();
-        if indices_vector.len() == 1 {
-            continue
-        }
-
-        variant_dict.insert(variant.clone(), indices_vector);
+    let mut hit_candidates = Vec::new();
+    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(v, _)| v) {
+        indices
+            .map(|(_, idx)| *idx)
+            .combinations(2)
+            .for_each(|v| hit_candidates.push((v[0], v[1])));
     }
 
-    variant_dict
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+    hit_candidates
+}
+
+fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
+    let mut variant_index_pairs = Vec::new();
+    let (transmitter, receiver) = mpsc::channel();
+
+    strings_primary
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter.clone(), |transmitter, (idx, s)| {
+            let variants = get_deletion_variants(s, max_edits);
+            transmitter
+                .send((CrossComparisonIndex::Primary(idx), variants))
+                .unwrap();
+        });
+
+    strings_comparison
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter, |transmitter, (idx, s)| {
+            let variants = get_deletion_variants(s, max_edits);
+            transmitter
+                .send((CrossComparisonIndex::Comparison(idx), variants))
+                .unwrap();
+        });
+
+    for (idx, mut variants) in receiver {
+        for variant in variants.drain(..) {
+            variant_index_pairs.push((variant, idx));
+        }
+    }
+
+    variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+    let mut index_pairs = Vec::new();
+    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(variant, _)| variant) {
+        let mut primary_indices = Vec::new();
+        let mut comparison_indices = Vec::new();
+        
+        indices.for_each(|(_, idx)| {
+            match idx {
+                CrossComparisonIndex::Primary(v) => primary_indices.push(*v),
+                CrossComparisonIndex::Comparison(v) => comparison_indices.push(*v),
+            }
+        });
+
+        for pair in primary_indices.into_iter().cartesian_product(comparison_indices) {
+            index_pairs.push(pair);
+        }
+    }
+
+    index_pairs.par_sort_unstable();
+    index_pairs.dedup();
+    index_pairs
 }
 
 /// Given an input string, generate all possible strings after making at most max_deletions
 /// single-character deletions.
-fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
-
+fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
-    deletion_variants.push(input.to_vec());
+    deletion_variants.push(input.to_string());
 
     for num_deletions in 1..=max_deletions {
         if num_deletions > input_length {
-            deletion_variants.push(Vec::new());
+            deletion_variants.push("".to_string());
             break
         }
-
-        for deletion_indices in get_k_combinations(input_length, num_deletions) {
-            let mut variant = Vec::new();
+        
+        for deletion_indices in (0..input_length).combinations(num_deletions) {
+            let mut variant = String::with_capacity(input_length-num_deletions);
             let mut offset = 0;
 
             for idx in deletion_indices.iter() {
-                variant.extend(&input[offset..*idx]);
+                variant.push_str(&input[offset..*idx]);
                 offset = idx + 1;
             }
-            variant.extend(&input[offset..input_length]);
+            variant.push_str(&input[offset..input_length]);
 
             deletion_variants.push(variant);
         }
@@ -151,63 +236,9 @@ fn get_deletion_variants(input: &[u8], max_deletions: usize) -> Vec<Vec<u8>> {
     deletion_variants
 }
 
-/// Return a vector containing all k-combinations of the integers in the range 0..n.
-fn get_k_combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
-    assert!(k <= n);
-
-    let mut combinations: Vec<Vec<usize>> = Vec::new();
-    let mut current_combination: Vec<usize> = Vec::new();
-
-    combination_search(n, k, 0, &mut current_combination, &mut combinations);
-
-    combinations
-}
-
-/// Recursive function used in computing k-combinations.
-fn combination_search(n: usize, k: usize, start: usize, current_combination: &mut Vec<usize>, combinations: &mut Vec<Vec<usize>>) {
-    if current_combination.len() == k {
-        combinations.push(current_combination.clone());
-        return
-    };
-
-    for idx in start..n {
-        current_combination.push(idx);
-        combination_search(n, k, idx+1, current_combination, combinations);
-        current_combination.pop();
-    };
-}
-
-/// iterate through the hashmap generated above and collect all candidates for hits
-fn get_hit_candidates(variant_lookup_table: &FxHashMap<Vec<u8>, Vec<usize>>) -> Vec<(usize, usize)> {
-    let mut hit_candidates = Vec::new();
-    let (transmitter, receiver) = mpsc::channel();
-
-    variant_lookup_table.par_iter().for_each_with(transmitter, |transmitter, (_, indices)| {
-        if indices.len() < 2 {
-            return
-        }
-        let combs = get_k_combinations(indices.len(), 2);
-        let pairs: Vec<_> = combs.iter().map(|comb| {
-            (indices[comb[0]], indices[comb[1]])
-        }).collect();
-        transmitter.send(pairs).unwrap();
-    });
-
-    for pairs in receiver {
-        for pair in pairs {
-            hit_candidates.push(pair);
-        }
-    }
-
-    hit_candidates.par_sort_unstable();
-    hit_candidates.dedup();
-
-    hit_candidates
-}
-
 /// Examine and double check hits to see if they are real (this will require an 
 /// implementation of Levenshtein distance)
-fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_edits: usize, out_stream: impl Write) {
+fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_edits: usize, out_stream: impl Write) {
     let mut writer = BufWriter::new(out_stream);
 
     let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
@@ -217,13 +248,42 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[Vec<u8>], max_e
                       (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
             max_edits
         } else {
-            levenshtein::distance(anchor, comparison)
+            levenshtein::distance(anchor.chars(), comparison.chars())
         };
 
         (*anchor_idx, *comparison_idx, dist)
     }).collect();
 
     for (a_idx, c_idx, dist) in true_hits.iter().filter(|(_,_,d)| *d <= max_edits) {
+        // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
+        // 0-indexed
+        write!(&mut writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
+    }
+}
+
+fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: impl Write) {
+    let mut writer = BufWriter::new(out_stream);
+
+    let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
+        .par_iter()
+        .map(|(idx_primary, idx_comparison)| {
+            let anchor = &strings_primary[*idx_primary];
+            let comparison = &strings_comparison[*idx_comparison];
+            let dist = if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
+                          (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
+                max_edits
+            } else {
+                levenshtein::distance(anchor.chars(), comparison.chars())
+            };
+
+            (*idx_primary, *idx_comparison, dist)
+        })
+        .collect();
+
+    for (a_idx, c_idx, dist) in candidates_with_dist {
+        if dist > max_edits {
+            continue
+        }
         // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
         // 0-indexed
         write!(&mut writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
@@ -237,38 +297,21 @@ mod tests {
     #[test]
     fn test_get_input_lines_as_ascii() {
         let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
-        let expected: Vec<Vec<u8>> = vec!["foo".into(), "bar".into(), "baz".into()];
+        let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
     }
 
     #[test]
-    fn test_get_k_combinations() {
-        let combinations = get_k_combinations(3, 2);
-        let expected = vec![
-            vec![0,1],
-            vec![0,2],
-            vec![1,2]
-        ];
-        assert_eq!(combinations, expected);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_get_k_combinations_panics() {
-        let _ = get_k_combinations(2, 3);
-    }
-
-    #[test]
     fn test_get_deletion_variants() {
-        let variants = get_deletion_variants(b"foo", 1);
-        let mut expected: Vec<Vec<u8>> = Vec::new();
+        let variants = get_deletion_variants("foo", 1);
+        let mut expected: Vec<String> = Vec::new();
         expected.push("fo".into());
         expected.push("foo".into());
         expected.push("oo".into());
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants(b"foo", 2);
-        let mut expected: Vec<Vec<u8>> = Vec::new();
+        let variants = get_deletion_variants("foo", 2);
+        let mut expected: Vec<String> = Vec::new();
         expected.push("f".into());
         expected.push("fo".into());
         expected.push("foo".into());
