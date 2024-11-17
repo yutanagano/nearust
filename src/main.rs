@@ -217,7 +217,7 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
         }
         
         for deletion_indices in (0..input_length).combinations(num_deletions) {
-            let mut variant = String::from("");
+            let mut variant = String::with_capacity(input_length-num_deletions);
             let mut offset = 0;
 
             for idx in deletion_indices.iter() {
