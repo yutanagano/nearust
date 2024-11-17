@@ -149,7 +149,8 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
             convergent_indices.push(indices);
         });
 
-    let mut hit_candidates = Vec::new();
+    let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
+    let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
     let (tx, rx) = mpsc::channel();
     convergent_indices
         .par_iter()
@@ -178,13 +179,13 @@ fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
         .iter()
         .map(|s| {
             (0..max_edits)
-                .map(|k| num_k_combs(s.len(), k))
+                .map(|k| get_num_k_combs(s.len(), k))
                 .sum::<usize>()
         })
         .sum()
 }
 
-fn num_k_combs(n: usize, k: usize) -> usize {
+fn get_num_k_combs(n: usize, k: usize) -> usize {
     assert!(n > 0);
     assert!(n >= k);
 
@@ -196,6 +197,13 @@ fn num_k_combs(n: usize, k: usize) -> usize {
     let subsample_perms: usize = (1..=k).product();
 
     return num_subsamples / subsample_perms
+}
+
+fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
+    convergent_indices
+        .iter()
+        .map(|indices| get_num_k_combs(indices.len(), 2))
+        .sum()
 }
 
 fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
@@ -353,10 +361,10 @@ mod tests {
 
     #[test]
     fn test_get_num_k_combinations() {
-        let result = num_k_combs(5, 2);
+        let result = get_num_k_combs(5, 2);
         assert_eq!(result, 10);
 
-        let result = num_k_combs(5, 0);
+        let result = get_num_k_combs(5, 0);
         assert_eq!(result, 1);
     }
 
@@ -377,5 +385,16 @@ mod tests {
         expected.push("o".into());
         expected.push("oo".into());
         assert_eq!(variants, expected);
+    }
+
+    #[test]
+    fn test_get_num_hit_candidates() {
+        let convergent_indices = &[
+            vec![1,2,3],
+            vec![1,2,3,4],
+            vec![1,2]
+        ];
+        let result = get_num_hit_candidates(convergent_indices);
+        assert_eq!(result, 10);
     }
 }
