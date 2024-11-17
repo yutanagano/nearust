@@ -9,15 +9,20 @@ use std::sync::mpsc;
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
 ///
-/// The program reads from the standard input until an EOF signal is reached, where each new line
-/// is considered to represent a distinct input string. All input must be valid ASCII. The program
-/// detects all pairs of input strings that are at most <MAX_DISTANCE> (default=1) edits away from
-/// one another, and prints them out to standard output. Each line in the program's output contains
-/// three integers separated with a comma, where the first two integers represent the (1-indexed)
-/// line numbers in the input data corresponding to the two neighbour strings, and the third number
-/// corresponds to the number of edits (Levenshtein distance) between them.
-///
-/// Example: echo $'fizz\nfuzz\nbuzz' | nearust -d 2 > results.txt
+/// If you provide nearust with a path to a [FILE_PRIAMRY], it will read its contents for input.
+/// If no path is supplied, nearust will read from the standard input until it receives an EOF signal.
+/// Nearust will then look for pairs of similar strings within its input, where each line of text is treated as an individual string.
+/// You can also supply nearust with two paths -- a [FILE_PRIMARY] and [FILE_COMPARISON], in which case the program will look for pairs of similar strings across the contents of the two files.
+/// Currently, only valid ASCII input is supported.
+/// 
+/// By default, the threshold (Levenshtein) edit distance at or below which a pair of strings are considered similar is set at 1.
+/// This can be changed by setting the --max-distance option.
+/// 
+/// Nearust's output is plain text, where each line encodes a detected pair of similar input strings.
+/// Each line is comprised of three integers separated by commas, which represent, in respective order:
+/// the (1-indexed) line number of the string from the primary input (i.e. stdin or [FILE_PRIMARY]),
+/// the (1-indexed) line number of the string from the secondary input (i.e. stdin or [FILE_PRIMARY] if one input, or [FILE_COMPARISON] if two inputs), and
+/// the (Levenshtein) edit distance between the similar strings.
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Args {
@@ -115,6 +120,8 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
     Ok(strings)
 }
 
+/// Given a slice of Strings, output a vector of indices corresponding to pairs of strings that are
+/// potentially within max_edits edits within one another.
 fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
@@ -206,6 +213,9 @@ fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
         .sum()
 }
 
+/// Given primary and comparison slices of strings, output a vector of indices (the first index
+/// corresponding to the primary slice and the second corresponding to the comparison slice)
+/// corresponding to pairs of strings that are potentially within max_edits within one another.
 fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
     let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
@@ -349,6 +359,7 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_ed
     }
 }
 
+/// write_true_hits but for when looking for pairs between a primary and comparison set of Strings.
 fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: impl Write) {
     let mut writer = BufWriter::new(out_stream);
 
