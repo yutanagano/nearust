@@ -117,17 +117,16 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
 
 fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let mut variant_index_pairs = Vec::new();
-    let (transmitter, receiver) = mpsc::channel();
-
+    let (tx, rx) = mpsc::channel();
     strings
         .par_iter()
         .enumerate()
-        .for_each_with(transmitter, |transmitter, (idx, s)| {
+        .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_edits);
             transmitter.send((idx, variants)).unwrap();
         });
 
-    for (idx, mut variants) in receiver {
+    for (idx, mut variants) in rx {
         for variant in variants.drain(..) {
             variant_index_pairs.push((variant, idx));
         }
@@ -135,16 +134,37 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
 
     variant_index_pairs.par_sort_unstable();
 
+    let mut convergent_indices = Vec::new();
+    variant_index_pairs
+        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+        .for_each(|group| {
+            if group.len() == 1 {
+                return
+            }
+            let indices = group
+                .iter()
+                .map(|(_, idx)| *idx)
+                .collect_vec();
+            convergent_indices.push(indices);
+        });
+
     let mut hit_candidates = Vec::new();
-    for indices in variant_index_pairs.chunk_by(|(v1, _), (v2, _)| v1 == v2) {
-        if indices.len() == 1 {
-            continue
+    let (tx, rx) = mpsc::channel();
+    convergent_indices
+        .par_iter()
+        .for_each_with(tx, |tx, indices| {
+            let pair_tuples = indices
+                .iter()
+                .combinations(2)
+                .map(|v| (*v[0], *v[1]))
+                .collect_vec();
+            tx.send(pair_tuples).unwrap();
+        });
+
+    for pair_tuples in rx {
+        for pair in pair_tuples {
+            hit_candidates.push(pair);
         }
-        indices
-            .iter()
-            .map(|(_, idx)| *idx)
-            .combinations(2)
-            .for_each(|v| hit_candidates.push((v[0], v[1])));
     }
 
     hit_candidates.par_sort_unstable();
