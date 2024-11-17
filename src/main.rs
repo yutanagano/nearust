@@ -137,6 +137,9 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
 
     let mut hit_candidates = Vec::new();
     for indices in variant_index_pairs.chunk_by(|(v1, _), (v2, _)| v1 == v2) {
+        if indices.len() == 1 {
+            continue
+        }
         indices
             .iter()
             .map(|(_, idx)| *idx)
