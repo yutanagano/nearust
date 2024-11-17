@@ -136,8 +136,9 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
     variant_index_pairs.par_sort_unstable();
 
     let mut hit_candidates = Vec::new();
-    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(v, _)| v) {
+    for indices in variant_index_pairs.chunk_by(|(v1, _), (v2, _)| v1 == v2) {
         indices
+            .iter()
             .map(|(_, idx)| *idx)
             .combinations(2)
             .for_each(|v| hit_candidates.push((v[0], v[1])));
@@ -181,11 +182,11 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
     variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     let mut index_pairs = Vec::new();
-    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(variant, _)| variant) {
+    for indices in variant_index_pairs.chunk_by(|(v1, _), (v2, _)| v1 == v2) {
         let mut primary_indices = Vec::new();
         let mut comparison_indices = Vec::new();
         
-        indices.for_each(|(_, idx)| {
+        indices.iter().for_each(|(_, idx)| {
             match idx {
                 CrossComparisonIndex::Primary(v) => primary_indices.push(*v),
                 CrossComparisonIndex::Comparison(v) => comparison_indices.push(*v),
