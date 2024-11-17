@@ -116,18 +116,18 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
 }
 
 fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
-    let mut variant_index_pairs = Vec::new();
-    let (transmitter, receiver) = mpsc::channel();
-
+    let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
+    let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
+    let (tx, rx) = mpsc::channel();
     strings
         .par_iter()
         .enumerate()
-        .for_each_with(transmitter, |transmitter, (idx, s)| {
+        .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_edits);
             transmitter.send((idx, variants)).unwrap();
         });
 
-    for (idx, mut variants) in receiver {
+    for (idx, mut variants) in rx {
         for variant in variants.drain(..) {
             variant_index_pairs.push((variant, idx));
         }
@@ -135,12 +135,38 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
 
     variant_index_pairs.par_sort_unstable();
 
-    let mut hit_candidates = Vec::new();
-    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(v, _)| v) {
-        indices
-            .map(|(_, idx)| *idx)
-            .combinations(2)
-            .for_each(|v| hit_candidates.push((v[0], v[1])));
+    let mut convergent_indices = Vec::new();
+    variant_index_pairs
+        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+        .for_each(|group| {
+            if group.len() == 1 {
+                return
+            }
+            let indices = group
+                .iter()
+                .map(|(_, idx)| *idx)
+                .collect_vec();
+            convergent_indices.push(indices);
+        });
+
+    let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
+    let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
+    let (tx, rx) = mpsc::channel();
+    convergent_indices
+        .par_iter()
+        .for_each_with(tx, |tx, indices| {
+            let pair_tuples = indices
+                .iter()
+                .combinations(2)
+                .map(|v| (*v[0], *v[1]))
+                .collect_vec();
+            tx.send(pair_tuples).unwrap();
+        });
+
+    for pair_tuples in rx {
+        for pair in pair_tuples {
+            hit_candidates.push(pair);
+        }
     }
 
     hit_candidates.par_sort_unstable();
@@ -148,10 +174,43 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
     hit_candidates
 }
 
-fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
-    let mut variant_index_pairs = Vec::new();
-    let (transmitter, receiver) = mpsc::channel();
+fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
+    strings
+        .iter()
+        .map(|s| {
+            (0..max_edits)
+                .map(|k| get_num_k_combs(s.len(), k))
+                .sum::<usize>()
+        })
+        .sum()
+}
 
+fn get_num_k_combs(n: usize, k: usize) -> usize {
+    assert!(n > 0);
+    assert!(n >= k);
+
+    if k == 0 {
+        return 1
+    }
+
+    let num_subsamples: usize = (n-k+1..=n).product();
+    let subsample_perms: usize = (1..=k).product();
+
+    return num_subsamples / subsample_perms
+}
+
+fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
+    convergent_indices
+        .iter()
+        .map(|indices| get_num_k_combs(indices.len(), 2))
+        .sum()
+}
+
+fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
+    let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
+    let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
+    let mut variant_index_pairs = Vec::with_capacity(num_vi_primary+num_vi_comparison);
+    let (transmitter, receiver) = mpsc::channel();
     strings_primary
         .par_iter()
         .enumerate()
@@ -161,7 +220,6 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
                 .send((CrossComparisonIndex::Primary(idx), variants))
                 .unwrap();
         });
-
     strings_comparison
         .par_iter()
         .enumerate()
@@ -180,26 +238,56 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
 
     variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
-    let mut index_pairs = Vec::new();
-    for (_, indices) in &variant_index_pairs.iter().chunk_by(|(variant, _)| variant) {
-        let mut primary_indices = Vec::new();
-        let mut comparison_indices = Vec::new();
-        
-        indices.for_each(|(_, idx)| {
-            match idx {
-                CrossComparisonIndex::Primary(v) => primary_indices.push(*v),
-                CrossComparisonIndex::Comparison(v) => comparison_indices.push(*v),
+    let mut convergent_indices = Vec::new();
+    let mut total_num_index_pairs = 0;
+    variant_index_pairs
+        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+        .for_each(|group| {
+            if group.len() == 1 {
+                return
             }
+
+            let mut indices_primary = Vec::new();
+            let mut indices_comparison = Vec::new();
+
+            group.iter().for_each(|(_, idx)| {
+                match idx {
+                    CrossComparisonIndex::Primary(v) => indices_primary.push(*v),
+                    CrossComparisonIndex::Comparison(v) => indices_comparison.push(*v),
+                }
+            });
+
+            let num_index_pairs = indices_primary.len() * indices_comparison.len();
+            if num_index_pairs == 0 {
+                return
+            }
+
+            total_num_index_pairs += num_index_pairs;
+            convergent_indices.push((indices_primary, indices_comparison));
         });
 
-        for pair in primary_indices.into_iter().cartesian_product(comparison_indices) {
-            index_pairs.push(pair);
+    let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
+    let (tx, rx) = mpsc::channel();
+    convergent_indices
+        .par_iter()
+        .for_each_with(tx, |tx, (indices_primary, indices_comparison)| {
+            let pair_tuples = indices_primary
+                .into_iter()
+                .cartesian_product(indices_comparison)
+                .map(|v| (*v.0, *v.1))
+                .collect_vec();
+            tx.send(pair_tuples).unwrap();
+        });
+
+    for pair_tuples in rx {
+        for pair in pair_tuples {
+            hit_candidates.push(pair);
         }
     }
 
-    index_pairs.par_sort_unstable();
-    index_pairs.dedup();
-    index_pairs
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+    hit_candidates
 }
 
 /// Given an input string, generate all possible strings after making at most max_deletions
@@ -302,6 +390,15 @@ mod tests {
     }
 
     #[test]
+    fn test_get_num_k_combinations() {
+        let result = get_num_k_combs(5, 2);
+        assert_eq!(result, 10);
+
+        let result = get_num_k_combs(5, 0);
+        assert_eq!(result, 1);
+    }
+
+    #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants("foo", 1);
         let mut expected: Vec<String> = Vec::new();
@@ -318,5 +415,16 @@ mod tests {
         expected.push("o".into());
         expected.push("oo".into());
         assert_eq!(variants, expected);
+    }
+
+    #[test]
+    fn test_get_num_hit_candidates() {
+        let convergent_indices = &[
+            vec![1,2,3],
+            vec![1,2,3,4],
+            vec![1,2]
+        ];
+        let result = get_num_hit_candidates(convergent_indices);
+        assert_eq!(result, 10);
     }
 }
