@@ -120,6 +120,8 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
     Ok(strings)
 }
 
+/// Given a slice of Strings, output a vector of indices corresponding to pairs of strings that are
+/// potentially within max_edits edits within one another.
 fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
@@ -211,6 +213,9 @@ fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
         .sum()
 }
 
+/// Given primary and comparison slices of strings, output a vector of indices (the first index
+/// corresponding to the primary slice and the second corresponding to the comparison slice)
+/// corresponding to pairs of strings that are potentially within max_edits within one another.
 fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
     let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
@@ -354,6 +359,7 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_ed
     }
 }
 
+/// write_true_hits but for when looking for pairs between a primary and comparison set of Strings.
 fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: impl Write) {
     let mut writer = BufWriter::new(out_stream);
 
