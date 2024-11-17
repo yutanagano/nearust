@@ -116,7 +116,8 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
 }
 
 fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
-    let mut variant_index_pairs = Vec::new();
+    let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
+    let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
     strings
         .par_iter()
@@ -170,6 +171,31 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
     hit_candidates
+}
+
+fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
+    strings
+        .iter()
+        .map(|s| {
+            (0..max_edits)
+                .map(|k| num_k_combs(s.len(), k))
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+fn num_k_combs(n: usize, k: usize) -> usize {
+    assert!(n > 0);
+    assert!(n >= k);
+
+    if k == 0 {
+        return 1
+    }
+
+    let num_subsamples: usize = (n-k+1..=n).product();
+    let subsample_perms: usize = (1..=k).product();
+
+    return num_subsamples / subsample_perms
 }
 
 fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
@@ -323,6 +349,15 @@ mod tests {
         let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
         let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
+    }
+
+    #[test]
+    fn test_get_num_k_combinations() {
+        let result = num_k_combs(5, 2);
+        assert_eq!(result, 10);
+
+        let result = num_k_combs(5, 0);
+        assert_eq!(result, 1);
     }
 
     #[test]
