@@ -55,7 +55,7 @@ enum CrossComparisonIndex {
 /// detected pair as a pair of 1-indexed line numbers of the input strings involved separated by a
 /// comma, and the lower line number is always first.
 fn main() {
-    let stdout = io::stdout().lock();
+    let mut stdout = BufWriter::new(io::stdout().lock());
     let args = Args::parse();
 
     ThreadPoolBuilder::new()
@@ -81,10 +81,10 @@ fn main() {
         let comparison_input = get_input_lines_as_ascii(comparison_reader)
             .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
         let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
-        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, stdout);
+        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
     } else {
         let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
-        write_true_hits(&hit_candidates, &primary_input, args.max_distance, stdout);
+        write_true_hits(&hit_candidates, &primary_input, args.max_distance, &mut stdout);
     }
 }
 
@@ -336,9 +336,7 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
 
 /// Examine and double check hits to see if they are real (this will require an 
 /// implementation of Levenshtein distance)
-fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_edits: usize, out_stream: impl Write) {
-    let mut writer = BufWriter::new(out_stream);
-
+fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_edits: usize, writer: &mut impl Write) {
     let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
         let anchor = &strings[*anchor_idx];
         let comparison = &strings[*comparison_idx];
@@ -355,14 +353,12 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_ed
     for (a_idx, c_idx, dist) in true_hits.iter().filter(|(_,_,d)| *d <= max_edits) {
         // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
         // 0-indexed
-        write!(&mut writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
+        write!(writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
     }
 }
 
 /// write_true_hits but for when looking for pairs between a primary and comparison set of Strings.
-fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: impl Write) {
-    let mut writer = BufWriter::new(out_stream);
-
+fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, writer: &mut impl Write) {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
         .map(|(idx_primary, idx_comparison)| {
@@ -385,12 +381,13 @@ fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[S
         }
         // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
         // 0-indexed
-        write!(&mut writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
+        write!(writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use io::Read;
     use super::*;
 
     #[test]
@@ -437,5 +434,24 @@ mod tests {
         ];
         let result = get_num_hit_candidates(convergent_indices);
         assert_eq!(result, 10);
+    }
+
+    /// Run this test from the project home directory so that the test CDR3 text files can be found
+    /// at the expected paths
+    #[test]
+    fn test_within() {
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
+        let test_input = get_input_lines_as_ascii(f).unwrap();
+
+        let mut f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
+        let mut expected_output = Vec::new();
+        let _ = f.read_to_end(&mut expected_output);
+
+        let mut test_output_stream = Vec::new();
+
+        let hit_candidates = get_hit_candidates(&test_input, 1);
+        write_true_hits(&hit_candidates, &test_input, 1, &mut test_output_stream);
+
+        assert_eq!(test_output_stream, expected_output);
     }
 }
