@@ -76,15 +76,18 @@ fn main() {
         }
     };
 
-    if let Some(path) = args.file_comparison {
-        let comparison_reader = get_file_bufreader(&path);
-        let comparison_input = get_input_lines_as_ascii(comparison_reader)
-            .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
-        let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
-        write_true_hits(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
-    } else {
-        let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
-        write_true_hits(&hit_candidates, &primary_input, &primary_input, args.max_distance, &mut stdout);
+    match args.file_comparison {
+        Some(path) => {
+            let comparison_reader = get_file_bufreader(&path);
+            let comparison_input = get_input_lines_as_ascii(comparison_reader)
+                .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
+            let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
+            write_true_hits(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
+        },
+        None => {
+            let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
+            write_true_hits(&hit_candidates, &primary_input, &primary_input, args.max_distance, &mut stdout);
+        }
     }
 }
 
