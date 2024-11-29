@@ -81,10 +81,10 @@ fn main() {
         let comparison_input = get_input_lines_as_ascii(comparison_reader)
             .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
         let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
-        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
+        write_true_hits(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
     } else {
         let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
-        write_true_hits(&hit_candidates, &primary_input, args.max_distance, &mut stdout);
+        write_true_hits(&hit_candidates, &primary_input, &primary_input, args.max_distance, &mut stdout);
     }
 }
 
@@ -334,31 +334,8 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
     deletion_variants
 }
 
-/// Examine and double check hits to see if they are real (this will require an 
-/// implementation of Levenshtein distance)
-fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_edits: usize, writer: &mut impl Write) {
-    let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
-        let anchor = &strings[*anchor_idx];
-        let comparison = &strings[*comparison_idx];
-        let dist = if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
-                      (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
-            max_edits
-        } else {
-            levenshtein::distance(anchor.chars(), comparison.chars())
-        };
-
-        (*anchor_idx, *comparison_idx, dist)
-    }).collect();
-
-    for (a_idx, c_idx, dist) in true_hits.iter().filter(|(_,_,d)| *d <= max_edits) {
-        // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
-        // 0-indexed
-        write!(writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
-    }
-}
-
-/// write_true_hits but for when looking for pairs between a primary and comparison set of Strings.
-fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, writer: &mut impl Write) {
+/// Examine and double check hits to see if they are real
+fn write_true_hits(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, writer: &mut impl Write) {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
         .map(|(idx_primary, idx_comparison)| {
@@ -450,7 +427,7 @@ mod tests {
         let mut test_output_stream = Vec::new();
 
         let hit_candidates = get_hit_candidates(&test_input, 1);
-        write_true_hits(&hit_candidates, &test_input, 1, &mut test_output_stream);
+        write_true_hits(&hit_candidates, &test_input, &test_input, 1, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
@@ -472,7 +449,7 @@ mod tests {
         let mut test_output_stream = Vec::new();
 
         let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, 1);
-        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, 1, &mut test_output_stream);
+        write_true_hits(&hit_candidates, &primary_input, &comparison_input, 1, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
