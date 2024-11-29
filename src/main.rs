@@ -81,13 +81,10 @@ fn main() {
             let comparison_reader = get_file_bufreader(&path);
             let comparison_input = get_input_lines_as_ascii(comparison_reader)
                 .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
-            let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
-            write_true_hits(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
+
+            run_symdel_across_sets(&primary_input, &comparison_input, args.max_distance, &mut stdout);
         },
-        None => {
-            let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
-            write_true_hits(&hit_candidates, &primary_input, &primary_input, args.max_distance, &mut stdout);
-        }
+        None => run_symdel_within_set(&primary_input, args.max_distance, &mut stdout),
     }
 }
 
@@ -121,6 +118,16 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
     }
 
     Ok(strings)
+}
+
+fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut impl Write) {
+    let hit_candidates = get_hit_candidates(strings, max_edits);
+    write_true_hits(&hit_candidates, strings, strings, max_edits, out_stream);
+}
+
+fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: &mut impl Write) {
+    let hit_candidates = get_hit_candidates_cross(strings_primary, strings_comparison, max_edits);
+    write_true_hits(&hit_candidates, strings_primary, strings_comparison, max_edits, out_stream);
 }
 
 /// Given a slice of Strings, output a vector of indices corresponding to pairs of strings that are
@@ -429,8 +436,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let hit_candidates = get_hit_candidates(&test_input, 1);
-        write_true_hits(&hit_candidates, &test_input, &test_input, 1, &mut test_output_stream);
+        run_symdel_within_set(&test_input, 1, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
@@ -451,8 +457,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, 1);
-        write_true_hits(&hit_candidates, &primary_input, &comparison_input, 1, &mut test_output_stream);
+        run_symdel_across_sets(&primary_input, &comparison_input, 1, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
