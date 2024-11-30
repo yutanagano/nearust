@@ -121,18 +121,6 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
 }
 
 fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut impl Write) {
-    let hit_candidates = get_hit_candidates(strings, max_edits);
-    write_true_hits(&hit_candidates, strings, strings, max_edits, out_stream);
-}
-
-fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: &mut impl Write) {
-    let hit_candidates = get_hit_candidates_cross(strings_primary, strings_comparison, max_edits);
-    write_true_hits(&hit_candidates, strings_primary, strings_comparison, max_edits, out_stream);
-}
-
-/// Given a slice of Strings, output a vector of indices corresponding to pairs of strings that are
-/// potentially within max_edits edits within one another.
-fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -188,45 +176,11 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
-    hit_candidates
+
+    write_true_hits(&hit_candidates, strings, strings, max_edits, out_stream);
 }
 
-fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
-    strings
-        .iter()
-        .map(|s| {
-            (0..max_edits)
-                .map(|k| get_num_k_combs(s.len(), k))
-                .sum::<usize>()
-        })
-        .sum()
-}
-
-fn get_num_k_combs(n: usize, k: usize) -> usize {
-    assert!(n > 0);
-    assert!(n >= k);
-
-    if k == 0 {
-        return 1
-    }
-
-    let num_subsamples: usize = (n-k+1..=n).product();
-    let subsample_perms: usize = (1..=k).product();
-
-    return num_subsamples / subsample_perms
-}
-
-fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
-    convergent_indices
-        .iter()
-        .map(|indices| get_num_k_combs(indices.len(), 2))
-        .sum()
-}
-
-/// Given primary and comparison slices of strings, output a vector of indices (the first index
-/// corresponding to the primary slice and the second corresponding to the comparison slice)
-/// corresponding to pairs of strings that are potentially within max_edits within one another.
-fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
+fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: &mut impl Write) {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
     let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_primary+num_vi_comparison);
@@ -307,7 +261,40 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
-    hit_candidates
+
+    write_true_hits(&hit_candidates, strings_primary, strings_comparison, max_edits, out_stream);
+}
+
+fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
+    strings
+        .iter()
+        .map(|s| {
+            (0..max_edits)
+                .map(|k| get_num_k_combs(s.len(), k))
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+fn get_num_k_combs(n: usize, k: usize) -> usize {
+    assert!(n > 0);
+    assert!(n >= k);
+
+    if k == 0 {
+        return 1
+    }
+
+    let num_subsamples: usize = (n-k+1..=n).product();
+    let subsample_perms: usize = (1..=k).product();
+
+    return num_subsamples / subsample_perms
+}
+
+fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
+    convergent_indices
+        .iter()
+        .map(|indices| get_num_k_combs(indices.len(), 2))
+        .sum()
 }
 
 /// Given an input string, generate all possible strings after making at most max_deletions
