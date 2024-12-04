@@ -3,7 +3,20 @@
 It is a fast, multi-threaded, CPU-based implementation of Chotisorayuth and Mayer's [symdel algorithm](https://arxiv.org/abs/2403.09010v1).
 
 ## Installing
-Check out the latest release to download pre-built binaries for your system.
+### Homebrew
+```bash
+brew install yutanagano/tap/nearust
+```
+
+### Shell script
+Replace `<LATEST-VERSION>` below to the latest release version tag:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/yutanagano/nearust/releases/download/<LATEST-VERSION>/nearust-installer.sh | sh
+```
+
+### Alternative methods
+For alternative installation methods including a direct binary download, check out the latest release.
 
 ## Quickstart
 ### Basic usage
