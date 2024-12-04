@@ -5,34 +5,26 @@ It is a fast, multi-threaded, CPU-based implementation of Chotisorayuth and Maye
 ## Installing
 Check out the latest release to download pre-built binaries for your system.
 
-## Features
-If you provide nearust with a path to a `[FILE_PRIAMRY]`, it will read its contents for input.
-If no path is supplied, nearust will read from the standard input until it receives an EOF signal.
-Nearust will then look for pairs of similar strings within its input, where each line of text is treated as an individual string.
-You can also supply nearust with two paths -- a `[FILE_PRIMARY]` and `[FILE_COMPARISON]`, in which case the program will look for pairs of similar strings across the contents of the two files.
-Currently, only valid ASCII input is supported.
-
-By default, the threshold (Levenshtein) edit distance at or below which a pair of strings are considered similar is set at 1.
-This can be changed by setting the `--max-distance` option.
-
-Nearust's output is plain text, where each line encodes a detected pair of similar input strings.
-Each line is comprised of three integers separated by commas, which represent:
-
-| Column        | Value                                                                                                                                                |
-| ---           | ---                                                                                                                                                  |
-| First column  | (1-indexed) line number of the string from the primary input (i.e. `stdin` or `[FILE_PRIMARY]`)                                                      |
-| Second column | (1-indexed) line number of the string from the secondary input (i.e. `stdin` or `[FILE_PRIMARY]` if one input, or `[FILE_COMPARISON]` if two inputs) |
-| Third column  | (Levenshtein) edit distance between the similar strings                                                                                              |
-
-For more help on the CLI options, try `nearust --help`.
-
-### Examples
+## Quickstart
+### Basic usage
+Give nearust a list of strings, and it will tell you which ones are similar.
+By default, it will detect which strings are within one (Levenshtein) edit distance away from one another.
+Nearust reads its standard input stream and considers each line (delineated by `newline` characters) a separate string.
+A minimal example is below:
 
 ```bash
 $ echo $'fizz\nfuzz\nbuzz' | nearust
 1,2,1
 2,3,1
 ```
+
+As you can see, nearust outputs its result in plaintext to standard output.
+Each line in its output corresponds to a pair of similar strings that is detected.
+The first two numbers in each line is the (1-indexed) line numbers corresponding to the two similar input strings.
+The third and final number is the number of edits separating the two strings.
+
+### Options
+To look for string pairs that are at most `<k>` edits away from each other, pass the option `-d <k>`:
 
 ```bash
 $ echo $'fizz\nfuzz\nbuzz' | nearust -d 2
@@ -41,8 +33,31 @@ $ echo $'fizz\nfuzz\nbuzz' | nearust -d 2
 2,3,1
 ```
 
-## Future plans / extensions
-- Fancier release infrastructure:
-    * Working installer scripts (shell + powershell)
-    * Distribute via homebrew
-- Support for wider unicode encodings outside of simple ASCII
+If you want the output to have 0-indexed line numbers as opposed to 1-indexed, pass the option `-z`:
+
+```bash
+$ echo $'fizz\nfuzz\nbuzz' | nearust -d 2 -z
+0,1,1
+0,2,2
+1,2,1
+```
+
+### Read from and write to files
+To read input from `input.txt` and write to `output.txt`:
+
+```bash
+$ cat input.txt | nearust > output.txt
+```
+
+or
+
+```bash
+$ nearust input.txt > output.txt
+```
+
+### Look for pairs across two string sets
+To look strictly for strings in `set_a.txt` that are similar to strings in `set_b.txt` (and ignore pairs within the sets that are similar to each other):
+
+```bash
+$ nearust set_a.txt set_b.txt > output.txt
+```
