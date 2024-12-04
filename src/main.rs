@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::{prelude::*, ThreadPoolBuilder};
@@ -33,6 +33,10 @@ struct Args {
     /// The number of OS threads the program spawns (if 0 spawns one thread per CPU core).
     #[arg(short, long, default_value_t = 0)]
     num_threads: usize,
+
+    /// 0-index line numbers in the output.
+    #[arg(short, long, action = ArgAction::SetTrue)]
+    zero_index: bool,
 
     /// Primary input file (if absent program reads from stdin until EOF).
     file_primary: Option<String>,
@@ -86,10 +90,16 @@ fn main() {
                 &primary_input,
                 &comparison_input,
                 args.max_distance,
+                args.zero_index,
                 &mut stdout,
             );
         }
-        None => run_symdel_within_set(&primary_input, args.max_distance, &mut stdout),
+        None => run_symdel_within_set(
+            &primary_input,
+            args.max_distance,
+            args.zero_index,
+            &mut stdout,
+        ),
     }
 }
 
@@ -125,7 +135,12 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
     Ok(strings)
 }
 
-fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut impl Write) {
+fn run_symdel_within_set(
+    strings: &[String],
+    max_edits: usize,
+    zero_indexed: bool,
+    out_stream: &mut impl Write,
+) {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -179,13 +194,21 @@ fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    write_true_hits(&hit_candidates, strings, strings, max_edits, out_stream);
+    write_true_hits(
+        &hit_candidates,
+        strings,
+        strings,
+        max_edits,
+        zero_indexed,
+        out_stream,
+    );
 }
 
 fn run_symdel_across_sets(
     strings_primary: &[String],
     strings_comparison: &[String],
     max_edits: usize,
+    zero_indexed: bool,
     out_stream: &mut impl Write,
 ) {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
@@ -272,6 +295,7 @@ fn run_symdel_across_sets(
         strings_primary,
         strings_comparison,
         max_edits,
+        zero_indexed,
         out_stream,
     );
 }
@@ -348,6 +372,7 @@ fn write_true_hits(
     strings_primary: &[String],
     strings_comparison: &[String],
     max_edits: usize,
+    zero_indexed: bool,
     writer: &mut impl Write,
 ) {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
@@ -372,9 +397,14 @@ fn write_true_hits(
         if dist > max_edits {
             continue;
         }
-        // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
-        // 0-indexed
-        write!(writer, "{},{},{}\n", a_idx + 1, c_idx + 1, dist).unwrap();
+
+        let (a_idx_to_write, c_idx_to_write) = if zero_indexed {
+            (a_idx, c_idx)
+        } else {
+            (a_idx + 1, c_idx + 1)
+        };
+
+        write!(writer, "{},{},{}\n", a_idx_to_write, c_idx_to_write, dist).unwrap();
     }
 }
 
@@ -438,7 +468,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        run_symdel_within_set(&test_input, 1, &mut test_output_stream);
+        run_symdel_within_set(&test_input, 1, false, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
@@ -463,6 +493,7 @@ mod tests {
             &primary_input,
             &comparison_input,
             1,
+            false,
             &mut test_output_stream,
         );
 
