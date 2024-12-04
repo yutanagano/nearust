@@ -94,7 +94,12 @@ fn main() {
                 &mut stdout,
             );
         }
-        None => run_symdel_within_set(&primary_input, args.max_distance, args.zero_index, &mut stdout),
+        None => run_symdel_within_set(
+            &primary_input,
+            args.max_distance,
+            args.zero_index,
+            &mut stdout,
+        ),
     }
 }
 
@@ -130,7 +135,12 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
     Ok(strings)
 }
 
-fn run_symdel_within_set(strings: &[String], max_edits: usize, zero_indexed: bool, out_stream: &mut impl Write) {
+fn run_symdel_within_set(
+    strings: &[String],
+    max_edits: usize,
+    zero_indexed: bool,
+    out_stream: &mut impl Write,
+) {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -184,7 +194,14 @@ fn run_symdel_within_set(strings: &[String], max_edits: usize, zero_indexed: boo
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    write_true_hits(&hit_candidates, strings, strings, max_edits, zero_indexed, out_stream);
+    write_true_hits(
+        &hit_candidates,
+        strings,
+        strings,
+        max_edits,
+        zero_indexed,
+        out_stream,
+    );
 }
 
 fn run_symdel_across_sets(
