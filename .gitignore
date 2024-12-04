@@ -1,5 +1,5 @@
 /target
 /perf.data*
 /flamegraph.svg
-/test_files
+/test_files_extra
 /*.txt
