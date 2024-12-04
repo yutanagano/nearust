@@ -14,10 +14,10 @@ use std::sync::mpsc;
 /// Nearust will then look for pairs of similar strings within its input, where each line of text is treated as an individual string.
 /// You can also supply nearust with two paths -- a [FILE_PRIMARY] and [FILE_COMPARISON], in which case the program will look for pairs of similar strings across the contents of the two files.
 /// Currently, only valid ASCII input is supported.
-/// 
+///
 /// By default, the threshold (Levenshtein) edit distance at or below which a pair of strings are considered similar is set at 1.
 /// This can be changed by setting the --max-distance option.
-/// 
+///
 /// Nearust's output is plain text, where each line encodes a detected pair of similar input strings.
 /// Each line is comprised of three integers separated by commas, which represent, in respective order:
 /// the (1-indexed) line number of the string from the primary input (i.e. stdin or [FILE_PRIMARY]),
@@ -27,7 +27,7 @@ use std::sync::mpsc;
 #[command(version)]
 struct Args {
     /// The maximum (Levenshtein) edit distance away to check for neighbours.
-    #[arg(short='d', long, default_value_t = 1)]
+    #[arg(short = 'd', long, default_value_t = 1)]
     max_distance: usize,
 
     /// The number of OS threads the program spawns (if 0 spawns one thread per CPU core).
@@ -39,7 +39,7 @@ struct Args {
 
     /// If provided, searches for pairs of similar strings between the primary input file and the
     /// comparison input file.
-    file_comparison: Option<String>
+    file_comparison: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -68,7 +68,7 @@ fn main() {
             let reader = get_file_bufreader(&path);
             get_input_lines_as_ascii(reader)
                 .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()))
-        },
+        }
         None => {
             let stdin = io::stdin().lock();
             get_input_lines_as_ascii(stdin)
@@ -82,16 +82,21 @@ fn main() {
             let comparison_input = get_input_lines_as_ascii(comparison_reader)
                 .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
 
-            run_symdel_across_sets(&primary_input, &comparison_input, args.max_distance, &mut stdout);
-        },
+            run_symdel_across_sets(
+                &primary_input,
+                &comparison_input,
+                args.max_distance,
+                &mut stdout,
+            );
+        }
         None => run_symdel_within_set(&primary_input, args.max_distance, &mut stdout),
     }
 }
 
 /// Get a buffered reader to a file at path.
 fn get_file_bufreader(path: &str) -> BufReader<File> {
-    let file = File::open(&path)
-        .unwrap_or_else(|e| panic!("failed to open {}: {}", &path, e.to_string()));
+    let file =
+        File::open(&path).unwrap_or_else(|e| panic!("failed to open {}: {}", &path, e.to_string()));
     BufReader::new(file)
 }
 
@@ -105,10 +110,10 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
         let line_unwrapped = line?;
 
         if !line_unwrapped.is_ascii() {
-            let err_msg = format!("input line {}: contains non-ASCII data", idx+1);
+            let err_msg = format!("input line {}: contains non-ASCII data", idx + 1);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
-        
+
         if line_unwrapped.len() > 255 {
             let err_msg = format!("input line {}: input strings longer than 255 characters are currently not supported", idx+1);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
@@ -145,12 +150,9 @@ fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut 
         .chunk_by(|(v1, _), (v2, _)| v1 == v2)
         .for_each(|group| {
             if group.len() == 1 {
-                return
+                return;
             }
-            let indices = group
-                .iter()
-                .map(|(_, idx)| *idx)
-                .collect_vec();
+            let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
             convergent_indices.push(indices);
         });
 
@@ -180,29 +182,34 @@ fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut 
     write_true_hits(&hit_candidates, strings, strings, max_edits, out_stream);
 }
 
-fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: &mut impl Write) {
+fn run_symdel_across_sets(
+    strings_primary: &[String],
+    strings_comparison: &[String],
+    max_edits: usize,
+    out_stream: &mut impl Write,
+) {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
     let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
-    let mut variant_index_pairs = Vec::with_capacity(num_vi_primary+num_vi_comparison);
+    let mut variant_index_pairs = Vec::with_capacity(num_vi_primary + num_vi_comparison);
     let (transmitter, receiver) = mpsc::channel();
-    strings_primary
-        .par_iter()
-        .enumerate()
-        .for_each_with(transmitter.clone(), |transmitter, (idx, s)| {
+    strings_primary.par_iter().enumerate().for_each_with(
+        transmitter.clone(),
+        |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_edits);
             transmitter
                 .send((CrossComparisonIndex::Primary(idx), variants))
                 .unwrap();
-        });
-    strings_comparison
-        .par_iter()
-        .enumerate()
-        .for_each_with(transmitter, |transmitter, (idx, s)| {
+        },
+    );
+    strings_comparison.par_iter().enumerate().for_each_with(
+        transmitter,
+        |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_edits);
             transmitter
                 .send((CrossComparisonIndex::Comparison(idx), variants))
                 .unwrap();
-        });
+        },
+    );
 
     for (idx, mut variants) in receiver {
         for variant in variants.drain(..) {
@@ -218,22 +225,20 @@ fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[Stri
         .chunk_by(|(v1, _), (v2, _)| v1 == v2)
         .for_each(|group| {
             if group.len() == 1 {
-                return
+                return;
             }
 
             let mut indices_primary = Vec::new();
             let mut indices_comparison = Vec::new();
 
-            group.iter().for_each(|(_, idx)| {
-                match idx {
-                    CrossComparisonIndex::Primary(v) => indices_primary.push(*v),
-                    CrossComparisonIndex::Comparison(v) => indices_comparison.push(*v),
-                }
+            group.iter().for_each(|(_, idx)| match idx {
+                CrossComparisonIndex::Primary(v) => indices_primary.push(*v),
+                CrossComparisonIndex::Comparison(v) => indices_comparison.push(*v),
             });
 
             let num_index_pairs = indices_primary.len() * indices_comparison.len();
             if num_index_pairs == 0 {
-                return
+                return;
             }
 
             total_num_index_pairs += num_index_pairs;
@@ -262,7 +267,13 @@ fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[Stri
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    write_true_hits(&hit_candidates, strings_primary, strings_comparison, max_edits, out_stream);
+    write_true_hits(
+        &hit_candidates,
+        strings_primary,
+        strings_comparison,
+        max_edits,
+        out_stream,
+    );
 }
 
 fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
@@ -281,13 +292,13 @@ fn get_num_k_combs(n: usize, k: usize) -> usize {
     assert!(n >= k);
 
     if k == 0 {
-        return 1
+        return 1;
     }
 
-    let num_subsamples: usize = (n-k+1..=n).product();
+    let num_subsamples: usize = (n - k + 1..=n).product();
     let subsample_perms: usize = (1..=k).product();
 
-    return num_subsamples / subsample_perms
+    return num_subsamples / subsample_perms;
 }
 
 fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
@@ -308,11 +319,11 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
     for num_deletions in 1..=max_deletions {
         if num_deletions > input_length {
             deletion_variants.push("".to_string());
-            break
+            break;
         }
-        
+
         for deletion_indices in (0..input_length).combinations(num_deletions) {
-            let mut variant = String::with_capacity(input_length-num_deletions);
+            let mut variant = String::with_capacity(input_length - num_deletions);
             let mut offset = 0;
 
             for idx in deletion_indices.iter() {
@@ -332,14 +343,22 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
 }
 
 /// Examine and double check hits to see if they are real
-fn write_true_hits(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, writer: &mut impl Write) {
+fn write_true_hits(
+    hit_candidates: &[(usize, usize)],
+    strings_primary: &[String],
+    strings_comparison: &[String],
+    max_edits: usize,
+    writer: &mut impl Write,
+) {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
         .map(|(idx_primary, idx_comparison)| {
             let anchor = &strings_primary[*idx_primary];
             let comparison = &strings_comparison[*idx_comparison];
-            let dist = if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
-                          (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
+            let dist = if (anchor.len() > comparison.len()
+                && anchor.len() - comparison.len() == max_edits)
+                || (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits)
+            {
                 max_edits
             } else {
                 levenshtein::distance(anchor.chars(), comparison.chars())
@@ -351,18 +370,18 @@ fn write_true_hits(hit_candidates: &[(usize, usize)], strings_primary: &[String]
 
     for (a_idx, c_idx, dist) in candidates_with_dist {
         if dist > max_edits {
-            continue
+            continue;
         }
         // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
         // 0-indexed
-        write!(writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
+        write!(writer, "{},{},{}\n", a_idx + 1, c_idx + 1, dist).unwrap();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use io::Read;
     use super::*;
+    use io::Read;
 
     #[test]
     fn test_get_input_lines_as_ascii() {
@@ -401,11 +420,7 @@ mod tests {
 
     #[test]
     fn test_get_num_hit_candidates() {
-        let convergent_indices = &[
-            vec![1,2,3],
-            vec![1,2,3,4],
-            vec![1,2]
-        ];
+        let convergent_indices = &[vec![1, 2, 3], vec![1, 2, 3, 4], vec![1, 2]];
         let result = get_num_hit_candidates(convergent_indices);
         assert_eq!(result, 10);
     }
@@ -444,7 +459,12 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        run_symdel_across_sets(&primary_input, &comparison_input, 1, &mut test_output_stream);
+        run_symdel_across_sets(
+            &primary_input,
+            &comparison_input,
+            1,
+            &mut test_output_stream,
+        );
 
         assert_eq!(test_output_stream, expected_output);
     }
