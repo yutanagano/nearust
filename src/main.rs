@@ -76,15 +76,15 @@ fn main() {
         }
     };
 
-    if let Some(path) = args.file_comparison {
-        let comparison_reader = get_file_bufreader(&path);
-        let comparison_input = get_input_lines_as_ascii(comparison_reader)
-            .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
-        let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, args.max_distance);
-        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, args.max_distance, &mut stdout);
-    } else {
-        let hit_candidates = get_hit_candidates(&primary_input, args.max_distance);
-        write_true_hits(&hit_candidates, &primary_input, args.max_distance, &mut stdout);
+    match args.file_comparison {
+        Some(path) => {
+            let comparison_reader = get_file_bufreader(&path);
+            let comparison_input = get_input_lines_as_ascii(comparison_reader)
+                .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
+
+            run_symdel_across_sets(&primary_input, &comparison_input, args.max_distance, &mut stdout);
+        },
+        None => run_symdel_within_set(&primary_input, args.max_distance, &mut stdout),
     }
 }
 
@@ -120,9 +120,7 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
     Ok(strings)
 }
 
-/// Given a slice of Strings, output a vector of indices corresponding to pairs of strings that are
-/// potentially within max_edits edits within one another.
-fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize)> {
+fn run_symdel_within_set(strings: &[String], max_edits: usize, out_stream: &mut impl Write) {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -178,45 +176,11 @@ fn get_hit_candidates(strings: &[String], max_edits: usize) -> Vec<(usize, usize
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
-    hit_candidates
+
+    write_true_hits(&hit_candidates, strings, strings, max_edits, out_stream);
 }
 
-fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
-    strings
-        .iter()
-        .map(|s| {
-            (0..max_edits)
-                .map(|k| get_num_k_combs(s.len(), k))
-                .sum::<usize>()
-        })
-        .sum()
-}
-
-fn get_num_k_combs(n: usize, k: usize) -> usize {
-    assert!(n > 0);
-    assert!(n >= k);
-
-    if k == 0 {
-        return 1
-    }
-
-    let num_subsamples: usize = (n-k+1..=n).product();
-    let subsample_perms: usize = (1..=k).product();
-
-    return num_subsamples / subsample_perms
-}
-
-fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
-    convergent_indices
-        .iter()
-        .map(|indices| get_num_k_combs(indices.len(), 2))
-        .sum()
-}
-
-/// Given primary and comparison slices of strings, output a vector of indices (the first index
-/// corresponding to the primary slice and the second corresponding to the comparison slice)
-/// corresponding to pairs of strings that are potentially within max_edits within one another.
-fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[String], max_edits: usize) -> Vec<(usize, usize)> {
+fn run_symdel_across_sets(strings_primary: &[String], strings_comparison: &[String], max_edits: usize, out_stream: &mut impl Write) {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
     let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_primary+num_vi_comparison);
@@ -297,7 +261,40 @@ fn get_hit_candidates_cross(strings_primary: &[String], strings_comparison: &[St
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
-    hit_candidates
+
+    write_true_hits(&hit_candidates, strings_primary, strings_comparison, max_edits, out_stream);
+}
+
+fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
+    strings
+        .iter()
+        .map(|s| {
+            (0..max_edits)
+                .map(|k| get_num_k_combs(s.len(), k))
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+fn get_num_k_combs(n: usize, k: usize) -> usize {
+    assert!(n > 0);
+    assert!(n >= k);
+
+    if k == 0 {
+        return 1
+    }
+
+    let num_subsamples: usize = (n-k+1..=n).product();
+    let subsample_perms: usize = (1..=k).product();
+
+    return num_subsamples / subsample_perms
+}
+
+fn get_num_hit_candidates(convergent_indices: &[Vec<usize>]) -> usize {
+    convergent_indices
+        .iter()
+        .map(|indices| get_num_k_combs(indices.len(), 2))
+        .sum()
 }
 
 /// Given an input string, generate all possible strings after making at most max_deletions
@@ -334,31 +331,8 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
     deletion_variants
 }
 
-/// Examine and double check hits to see if they are real (this will require an 
-/// implementation of Levenshtein distance)
-fn write_true_hits(hit_candidates: &[(usize, usize)], strings: &[String], max_edits: usize, writer: &mut impl Write) {
-    let true_hits: Vec<(usize, usize, usize)> = hit_candidates.par_iter().map(|(anchor_idx, comparison_idx)| {
-        let anchor = &strings[*anchor_idx];
-        let comparison = &strings[*comparison_idx];
-        let dist = if (anchor.len() > comparison.len() && anchor.len() - comparison.len() == max_edits) ||
-                      (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits) {
-            max_edits
-        } else {
-            levenshtein::distance(anchor.chars(), comparison.chars())
-        };
-
-        (*anchor_idx, *comparison_idx, dist)
-    }).collect();
-
-    for (a_idx, c_idx, dist) in true_hits.iter().filter(|(_,_,d)| *d <= max_edits) {
-        // Add one to both anchor and comparison indices as line numbers are 1-indexed, not
-        // 0-indexed
-        write!(writer, "{},{},{}\n", a_idx+1, c_idx+1, dist).unwrap();
-    }
-}
-
-/// write_true_hits but for when looking for pairs between a primary and comparison set of Strings.
-fn write_true_hits_cross(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, writer: &mut impl Write) {
+/// Examine and double check hits to see if they are real
+fn write_true_hits(hit_candidates: &[(usize, usize)], strings_primary: &[String], strings_comparison: &[String], max_edits: usize, writer: &mut impl Write) {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
         .map(|(idx_primary, idx_comparison)| {
@@ -449,8 +423,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let hit_candidates = get_hit_candidates(&test_input, 1);
-        write_true_hits(&hit_candidates, &test_input, 1, &mut test_output_stream);
+        run_symdel_within_set(&test_input, 1, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
@@ -471,8 +444,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let hit_candidates = get_hit_candidates_cross(&primary_input, &comparison_input, 1);
-        write_true_hits_cross(&hit_candidates, &primary_input, &comparison_input, 1, &mut test_output_stream);
+        run_symdel_across_sets(&primary_input, &comparison_input, 1, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
     }
