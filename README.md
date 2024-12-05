@@ -19,6 +19,9 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/yutanagano/nearust/rele
 For alternative installation methods including a direct binary download, check out the latest release.
 
 ## Quickstart
+Use the examples below to get started.
+You can also view nearust's inline help text with `nearust --help`.
+
 ### Basic usage
 Give nearust a list of strings, and it will tell you which ones are similar.
 By default, it will detect which strings are within one (Levenshtein) edit distance away from one another.
