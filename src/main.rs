@@ -6,10 +6,9 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
 use std::sync::mpsc;
 
-/// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
-/// threshold edit distance.
+/// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a threshold edit distance.
 ///
-/// If you provide nearust with a path to a [FILE_PRIAMRY], it will read its contents for input.
+/// If you provide nearust with a path to a [FILE_PRIMARY], it will read its contents for input.
 /// If no path is supplied, nearust will read from the standard input until it receives an EOF signal.
 /// Nearust will then look for pairs of similar strings within its input, where each line of text is treated as an individual string.
 /// You can also supply nearust with two paths -- a [FILE_PRIMARY] and [FILE_COMPARISON], in which case the program will look for pairs of similar strings across the contents of the two files.
