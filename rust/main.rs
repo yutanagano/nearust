@@ -1,5 +1,5 @@
 use clap::{ArgAction, Parser};
-use nearustlib::{run_symdel_across_sets, run_symdel_within_set};
+use nearust::{run_symdel_across_sets, run_symdel_within_set};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
