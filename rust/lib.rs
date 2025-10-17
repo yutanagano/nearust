@@ -16,7 +16,7 @@ pub fn run_symdel_within_set(
     strings: &[String],
     max_edits: usize,
     zero_indexed: bool,
-) -> Vec<[usize; 3]> {
+) -> Vec<(usize, usize, usize)> {
     let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -78,7 +78,7 @@ pub fn run_symdel_across_sets(
     strings_comparison: &[String],
     max_edits: usize,
     zero_indexed: bool,
-) -> Vec<[usize; 3]> {
+) -> Vec<(usize, usize, usize)> {
     let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
     let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_primary + num_vi_comparison);
@@ -240,9 +240,8 @@ fn get_true_hits(
     strings_comparison: &[String],
     max_edits: usize,
     zero_indexed: bool,
-    // writer: &mut impl Write,
-) -> Vec<[usize; 3]> {
-    let candidates_with_dist: Vec<[usize; 3]> = hit_candidates
+) -> Vec<(usize, usize, usize)> {
+    let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
         .map(|(idx_primary, idx_comparison)| {
             let anchor = &strings_primary[*idx_primary];
@@ -256,12 +255,12 @@ fn get_true_hits(
                 levenshtein::distance(anchor.chars(), comparison.chars())
             };
 
-            [*idx_primary, *idx_comparison, dist]
+            (*idx_primary, *idx_comparison, dist)
         })
         .collect();
 
     let mut results = Vec::new();
-    for [a_idx, c_idx, dist] in candidates_with_dist {
+    for (a_idx, c_idx, dist) in candidates_with_dist {
         if dist > max_edits {
             continue;
         }
@@ -272,7 +271,7 @@ fn get_true_hits(
             (a_idx + 1, c_idx + 1)
         };
 
-        results.push([a_idx_to_write, c_idx_to_write, dist]);
+        results.push((a_idx_to_write, c_idx_to_write, dist));
     }
     results
 }

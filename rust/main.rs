@@ -93,8 +93,8 @@ fn main() {
 }
 
 /// Write to stdout
-fn write_results(results: Vec<[usize; 3]>, writer: &mut impl Write) {
-    for [a_idx_to_write, c_idx_to_write, dist] in results.iter() {
+fn write_results(results: Vec<(usize, usize, usize)>, writer: &mut impl Write) {
+    for (a_idx_to_write, c_idx_to_write, dist) in results.iter() {
         write!(writer, "{},{},{}\n", a_idx_to_write, c_idx_to_write, dist).unwrap();
     }
 }
