@@ -3,7 +3,7 @@ name = "nearust"
 authors = ["Yuta Nagano"]
 version = "0.3.0"
 edition = "2021"
-description = "a minimal CLI utility for fast detection of similar strings"
+description = "Fast detection of similar strings"
 repository = "https://github.com/yutanagano/nearust"
 homepage = "https://github.com/yutanagano/nearust"
 
