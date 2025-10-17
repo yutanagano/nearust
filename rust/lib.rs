@@ -12,19 +12,19 @@ enum CrossComparisonIndex {
     Comparison(usize),
 }
 
-pub fn run_symdel_within_set(
+pub fn symdel_within_set(
     strings: &[String],
-    max_edits: usize,
-    zero_indexed: bool,
+    max_distance: usize,
+    zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
-    let num_vi_pairs = get_num_vi_pairs(strings, max_edits);
+    let num_vi_pairs = get_num_vi_pairs(strings, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
     strings
         .par_iter()
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_edits);
+            let variants = get_deletion_variants(s, max_distance);
             transmitter.send((idx, variants)).unwrap();
         });
 
@@ -70,23 +70,23 @@ pub fn run_symdel_within_set(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(&hit_candidates, strings, strings, max_edits, zero_indexed)
+    get_true_hits(&hit_candidates, strings, strings, max_distance, zero_index)
 }
 
-pub fn run_symdel_across_sets(
+pub fn symdel_across_sets(
     strings_primary: &[String],
     strings_comparison: &[String],
-    max_edits: usize,
-    zero_indexed: bool,
+    max_distance: usize,
+    zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
-    let num_vi_primary = get_num_vi_pairs(strings_primary, max_edits);
-    let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_edits);
+    let num_vi_primary = get_num_vi_pairs(strings_primary, max_distance);
+    let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_primary + num_vi_comparison);
     let (transmitter, receiver) = mpsc::channel();
     strings_primary.par_iter().enumerate().for_each_with(
         transmitter.clone(),
         |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_edits);
+            let variants = get_deletion_variants(s, max_distance);
             transmitter
                 .send((CrossComparisonIndex::Primary(idx), variants))
                 .unwrap();
@@ -95,7 +95,7 @@ pub fn run_symdel_across_sets(
     strings_comparison.par_iter().enumerate().for_each_with(
         transmitter,
         |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_edits);
+            let variants = get_deletion_variants(s, max_distance);
             transmitter
                 .send((CrossComparisonIndex::Comparison(idx), variants))
                 .unwrap();
@@ -162,16 +162,16 @@ pub fn run_symdel_across_sets(
         &hit_candidates,
         strings_primary,
         strings_comparison,
-        max_edits,
-        zero_indexed,
+        max_distance,
+        zero_index,
     )
 }
 
-fn get_num_vi_pairs(strings: &[String], max_edits: usize) -> usize {
+fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
     strings
         .iter()
         .map(|s| {
-            (0..max_edits)
+            (0..max_distance)
                 .map(|k| get_num_k_combs(s.len(), k))
                 .sum::<usize>()
         })
@@ -238,8 +238,8 @@ fn get_true_hits(
     hit_candidates: &[(usize, usize)],
     strings_primary: &[String],
     strings_comparison: &[String],
-    max_edits: usize,
-    zero_indexed: bool,
+    max_distance: usize,
+    zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
@@ -247,10 +247,11 @@ fn get_true_hits(
             let anchor = &strings_primary[*idx_primary];
             let comparison = &strings_comparison[*idx_comparison];
             let dist = if (anchor.len() > comparison.len()
-                && anchor.len() - comparison.len() == max_edits)
-                || (anchor.len() < comparison.len() && comparison.len() - anchor.len() == max_edits)
+                && anchor.len() - comparison.len() == max_distance)
+                || (anchor.len() < comparison.len()
+                    && comparison.len() - anchor.len() == max_distance)
             {
-                max_edits
+                max_distance
             } else {
                 levenshtein::distance(anchor.chars(), comparison.chars())
             };
@@ -261,11 +262,11 @@ fn get_true_hits(
 
     let mut results = Vec::new();
     for (a_idx, c_idx, dist) in candidates_with_dist {
-        if dist > max_edits {
+        if dist > max_distance {
             continue;
         }
 
-        let (a_idx_to_write, c_idx_to_write) = if zero_indexed {
+        let (a_idx_to_write, c_idx_to_write) = if zero_index {
             (a_idx, c_idx)
         } else {
             (a_idx + 1, c_idx + 1)

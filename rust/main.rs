@@ -1,4 +1,4 @@
-use _lib::{run_symdel_across_sets, run_symdel_within_set};
+use _lib::{symdel_across_sets, symdel_within_set};
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
@@ -80,14 +80,14 @@ fn main() {
             let comparison_input = get_input_lines_as_ascii(comparison_reader)
                 .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
 
-            run_symdel_across_sets(
+            symdel_across_sets(
                 &primary_input,
                 &comparison_input,
                 args.max_distance,
                 args.zero_index,
             )
         }
-        None => run_symdel_within_set(&primary_input, args.max_distance, args.zero_index),
+        None => symdel_within_set(&primary_input, args.max_distance, args.zero_index),
     };
     write_results(results, &mut stdout);
 }
@@ -156,7 +156,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let results = run_symdel_within_set(&test_input, 1, false);
+        let results = symdel_within_set(&test_input, 1, false);
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
@@ -178,7 +178,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let results = run_symdel_across_sets(&primary_input, &comparison_input, 1, false);
+        let results = symdel_across_sets(&primary_input, &comparison_input, 1, false);
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);

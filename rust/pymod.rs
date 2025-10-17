@@ -1,29 +1,28 @@
-use super::*;
 use pyo3::prelude::*;
 
 #[pyfunction]
-#[pyo3(signature = (strings, max_edits = 2, zero_indexed = true))]
+#[pyo3(signature = (strings, max_distance = 2, zero_index = true))]
 fn symdel_within_set(
     strings: Vec<String>,
-    max_edits: usize,
-    zero_indexed: bool,
+    max_distance: usize,
+    zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
-    run_symdel_within_set(&strings, max_edits, zero_indexed)
+    super::symdel_within_set(&strings, max_distance, zero_index)
 }
 
 #[pyfunction]
-#[pyo3(signature = (strings_primary, strings_comparison, max_edits = 2, zero_indexed = true))]
+#[pyo3(signature = (strings_primary, strings_comparison, max_distance = 2, zero_index = true))]
 fn symdel_across_sets(
     strings_primary: Vec<String>,
     strings_comparison: Vec<String>,
-    max_edits: usize,
-    zero_indexed: bool,
+    max_distance: usize,
+    zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
-    run_symdel_across_sets(
+    super::symdel_across_sets(
         &strings_primary,
         &strings_comparison,
-        max_edits,
-        zero_indexed,
+        max_distance,
+        zero_index,
     )
 }
 
