@@ -7,8 +7,8 @@ fn symdel_within_set(
     strings: Vec<String>,
     max_edits: usize,
     zero_indexed: bool,
-) -> PyResult<Vec<(usize, usize, usize)>> {
-    Ok(run_symdel_within_set(&strings, max_edits, zero_indexed))
+) -> Vec<(usize, usize, usize)> {
+    run_symdel_within_set(&strings, max_edits, zero_indexed)
 }
 
 #[pyfunction]
@@ -18,13 +18,13 @@ fn symdel_across_sets(
     strings_comparison: Vec<String>,
     max_edits: usize,
     zero_indexed: bool,
-) -> PyResult<Vec<(usize, usize, usize)>> {
-    Ok(run_symdel_across_sets(
+) -> Vec<(usize, usize, usize)> {
+    run_symdel_across_sets(
         &strings_primary,
         &strings_comparison,
         max_edits,
         zero_indexed,
-    ))
+    )
 }
 
 #[pymodule]
