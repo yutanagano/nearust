@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 
 #[pyfunction]
-#[pyo3(signature = (strings, max_distance = 2, zero_index = true))]
 fn symdel_within_set(
     strings: Vec<String>,
     max_distance: usize,
@@ -11,7 +10,6 @@ fn symdel_within_set(
 }
 
 #[pyfunction]
-#[pyo3(signature = (strings_primary, strings_comparison, max_distance = 2, zero_index = true))]
 fn symdel_across_sets(
     strings_primary: Vec<String>,
     strings_comparison: Vec<String>,
