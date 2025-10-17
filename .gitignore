@@ -2,7 +2,6 @@
 /perf.data*
 /flamegraph.svg
 /test_files_extra
-/*.txt
 .venv
 *pycache*
 *egg-info*
