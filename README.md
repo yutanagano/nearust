@@ -1,14 +1,18 @@
 # nearust
-`nearust` is a minimal CLI utility for fast detection of nearest neighbour strings that fall within a threshold edit distance.
+
+`nearust` is a tool for fast detection of nearest neighbour strings that fall within a threshold edit distance.
 It is a fast, multi-threaded, CPU-based implementation of Chotisorayuth and Mayer's [symdel algorithm](https://arxiv.org/abs/2403.09010v1).
 
 ## Installing
+
 ### Homebrew
+
 ```bash
 brew install yutanagano/tap/nearust
 ```
 
 ### Shell script
+
 Replace `<LATEST-VERSION>` below to the latest release version tag:
 
 ```bash
@@ -16,13 +20,16 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/yutanagano/nearust/rele
 ```
 
 ### Alternative methods
+
 For alternative installation methods including a direct binary download, check out the latest release.
 
 ## Quickstart
+
 Use the examples below to get started.
 You can also view nearust's inline help text with `nearust --help`.
 
 ### Basic usage
+
 Give nearust a list of strings, and it will tell you which ones are similar.
 By default, it will detect which strings are within one (Levenshtein) edit distance away from one another.
 Nearust reads its standard input stream and considers each line (delineated by `newline` characters) a separate string.
@@ -40,6 +47,7 @@ The first two numbers in each line is the (1-indexed) line numbers corresponding
 The third and final number is the number of edits separating the two strings.
 
 ### Options
+
 To look for string pairs that are at most `<k>` edits away from each other, pass the option `-d <k>`:
 
 ```bash
@@ -59,6 +67,7 @@ $ echo $'fizz\nfuzz\nbuzz' | nearust -d 2 -z
 ```
 
 ### Read from and write to files
+
 To read input from `input.txt` and write to `output.txt`:
 
 ```bash
@@ -72,6 +81,7 @@ $ nearust input.txt > output.txt
 ```
 
 ### Look for pairs across two string sets
+
 To look strictly for strings in `set_a.txt` that are similar to strings in `set_b.txt` (and ignore pairs within the sets that are similar to each other):
 
 ```bash
