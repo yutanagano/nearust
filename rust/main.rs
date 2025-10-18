@@ -116,12 +116,11 @@ fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Erro
         let line_unwrapped = line?;
 
         if !line_unwrapped.is_ascii() {
-            let err_msg = format!("input line {}: contains non-ASCII data", idx + 1);
-            return Err(Error::new(ErrorKind::InvalidData, err_msg));
-        }
-
-        if line_unwrapped.len() > 255 {
-            let err_msg = format!("input line {}: input strings longer than 255 characters are currently not supported", idx+1);
+            let err_msg = format!(
+                "non-ASCII data is currently unsupported (\"{}\" from input line {})",
+                line_unwrapped,
+                idx + 1
+            );
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
 
