@@ -12,7 +12,7 @@ authors = [
 ]
 maintainers = [{ name = "Yuta Nagano", email = "yutanagano51@proton.me" }]
 description = "Fast detection of similar strings"
-readme = "README.md"
+readme = "pypi_README.md"
 keywords = [
   "edit-distance",
   "levenshtein-distance",
@@ -25,6 +25,9 @@ classifiers = [
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Topic :: Text Processing",
   "Topic :: Scientific/Engineering",
