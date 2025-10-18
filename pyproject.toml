@@ -40,3 +40,16 @@ find = { where = ["python"] }
 
 [[tool.setuptools-rust.ext-modules]]
 target = "nearust._lib"
+
+[tool.cibuildwheel]
+skip = ["*-musllinux_i686"]
+
+[tool.cibuildwheel.linux]
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y"
+environment = { PATH = "$HOME/.cargo/bin:$PATH" }
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
+
+[tool.cibuildwheel.windows]
+before-all = "rustup target add i686-pc-windows-msvc"
