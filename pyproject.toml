@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools", "setuptools-rust"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nearust"
+requires-python = ">=3.10"
+version = "0.3.0"
+authors = [
+  { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
+  { name = "Matthew Cowley" },
+]
+maintainers = [{ name = "Yuta Nagano", email = "yutanagano51@proton.me" }]
+description = "Fast detection of similar strings"
+readme = "pypi_README.md"
+keywords = [
+  "edit-distance",
+  "levenshtein-distance",
+  "string-matching",
+  "string-search",
+  "string-similarity",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Text Processing",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/yutanagano/nearust"
+Repository = "https://github.com/yutanagano/nearust"
+Issues = "https://github.com/yutanagano/nearust/issues"
+
+[tool.setuptools.packages]
+find = { where = ["python"] }
+
+[[tool.setuptools-rust.ext-modules]]
+target = "nearust._lib"
+
+[tool.cibuildwheel]
+skip = ["*-musllinux_i686"]
+
+[tool.cibuildwheel.linux]
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y"
+environment = { PATH = "$HOME/.cargo/bin:$PATH" }
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
+
+[tool.cibuildwheel.windows]
+before-all = "rustup target add i686-pc-windows-msvc"
