@@ -1,3 +1,7 @@
+"""
+A tool for fast detection of similar strings.
+"""
+
 import nearust._lib as rustlib
 from typing import Iterable, Optional
 
