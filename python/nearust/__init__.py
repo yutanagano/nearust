@@ -1,12 +1,14 @@
 import nearust._lib as rustlib
-from typing import Iterable
+from typing import Iterable, Optional
 
 
 __all__ = ["symdel"]
 
 
 def symdel(
-    query: Iterable[str], reference: Iterable[str] = None, max_distance: int = 1
+    query: Iterable[str],
+    reference: Optional[Iterable[str]] = None,
+    max_distance: int = 1,
 ):
     """
     Fast, multi-threaded implementation of Chotisorayuth and Mayer's symdel
