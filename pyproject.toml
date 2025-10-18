@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 version = "0.3.0"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
-  { name = "Matthew Cowley" },
+  { name = "Matthew Cowley", email = "matthew.v.cowley@gmail.com" },
 ]
 maintainers = [{ name = "Yuta Nagano", email = "yutanagano51@proton.me" }]
 description = "Fast detection of similar strings"
