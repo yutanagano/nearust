@@ -1,4 +1,5 @@
 from importlib import metadata
+import os
 
 # Configuration file for the Sphinx documentation builder.
 #
@@ -31,3 +32,4 @@ exclude_patterns = []
 
 html_theme = "shibuya"
 html_static_path = ["_static"]
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
