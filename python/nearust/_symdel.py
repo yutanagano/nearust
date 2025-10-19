@@ -34,6 +34,33 @@ def symdel(
         and `reference`, then it returns string pairs across the two sets,
         where the first index always corresponds to a string from `query`, and
         the second index always corresponds to a string from `reference`.
+
+    Examples
+    --------
+    Provide one iterable over strings to look for pairs of similar strings
+    within it.
+
+    >>> nearust.symdel(["fizz", "fuzz", "buzz"])
+    [(0, 1, 1), (1, 2, 1)]
+
+    To increase the threshold at which string pairs are considered similar, set
+    `max_distance`.
+
+    >>> nearust.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
+    [(0, 1, 1), (0, 2, 2), (1, 2, 1)]
+
+    To look for pairs of similar strings across two sets, set both provide two
+    iterables over strings (`query` and `reference`).
+
+    >>> nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
+    [(1, 3, 1), (2, 2, 1), (2, 3, 0)]
+
+    If you would like the string indices returned to be 1-based instead of
+    0-based (in a manner similar to the default behaviour of the CLI), you can
+    set `zero_index` to False.
+
+    >>> nearust.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
+    [(1, 2, 1), (2, 3, 1)]
     """
     if reference is not None:
         return rustlib.symdel_across_sets(query, reference, max_distance, zero_index)
