@@ -19,6 +19,7 @@ release = metadata.version("nearust")
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
+    "sphinx.ext.doctest",
 ]
 
 templates_path = ["_templates"]

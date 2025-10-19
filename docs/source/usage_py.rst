@@ -15,7 +15,7 @@ To look for pairs of similar strings within one set, you can run
 
 >>> import nearust
 >>> nearust.symdel(["fizz", "fuzz", "buzz"])
-[(0,1,1), (1,2,1)]
+[(0, 1, 1), (1, 2, 1)]
 
 nearust returns a list of integer triplets, where each triplet represents a
 pair of similar strings that have been detected. The first two integers
@@ -32,7 +32,7 @@ function will strictly look for strings in the first set that are similar to
 strings in the second set.
 
 >>> nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
-[(2,2,1), (2,3,0)]
+[(1, 3, 1), (2, 2, 1), (2, 3, 0)]
 
 Note that in the returned triplets, the first index always corresponds to a
 string from the first iterable (the `query`), and the second index always
