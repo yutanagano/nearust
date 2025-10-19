@@ -19,7 +19,7 @@ release = metadata.version("nearust")
 
 extensions = [
     "sphinx.ext.autodoc",
-    "sphinx.ext.napoleon",
+    "numpydoc",
     "sphinx.ext.doctest",
 ]
 
@@ -33,3 +33,4 @@ exclude_patterns = []
 html_theme = "shibuya"
 html_static_path = ["_static"]
 html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
+html_theme_options = {"github_url": "https://github.com/yutanagano/nearust"}

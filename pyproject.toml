@@ -34,7 +34,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["sphinx", "esbonio", "shibuya"]
+dev = ["sphinx", "esbonio", "shibuya", "numpydoc"]
 
 [project.urls]
 Homepage = "https://github.com/yutanagano/nearust"
