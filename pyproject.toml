@@ -33,6 +33,9 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 
+[project.optional-dependencies]
+dev = ["sphinx"]
+
 [project.urls]
 Homepage = "https://github.com/yutanagano/nearust"
 Repository = "https://github.com/yutanagano/nearust"
