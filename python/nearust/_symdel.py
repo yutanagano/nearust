@@ -35,6 +35,11 @@ def symdel(
         where the first index always corresponds to a string from `query`, and
         the second index always corresponds to a string from `reference`.
 
+    Raises
+    ------
+    ValueError
+        If any of the input strings contain non-ASCII characters.
+
     Examples
     --------
     Provide one iterable over strings to look for pairs of similar strings

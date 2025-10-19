@@ -4,9 +4,18 @@ Installation
 CLI
 ---
 
+Homebrew (recommended)
+......................
+
 .. code-block:: console
 
    $ brew install yutanagano/tap/nearust
+
+Alternate methods
+.................
+
+Check out the releases page `releases page
+<https://github.com/yutanagano/nearust/releases>`_ on the project's GitHub.
 
 Python package
 --------------
