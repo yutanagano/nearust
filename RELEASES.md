@@ -4,6 +4,8 @@
 - Add documentation page
 - Remove previous restriction where only input strings of length < 255
   characters were allowed
+- Build CLI and Python package for all major platforms (ARM platforms + MUSL
+  Linux newly added)
 
 ## Version 0.3.0
 
