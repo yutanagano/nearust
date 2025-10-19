@@ -38,6 +38,7 @@ dev = ["sphinx", "esbonio", "shibuya", "numpydoc"]
 
 [project.urls]
 Homepage = "https://github.com/yutanagano/nearust"
+Documentation = "https://nearust.readthedocs.io"
 Repository = "https://github.com/yutanagano/nearust"
 Issues = "https://github.com/yutanagano/nearust/issues"
 
