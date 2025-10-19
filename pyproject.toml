@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nearust"
 requires-python = ">=3.10"
-version = "0.3.0"
+version = "0.4.0"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
   { name = "Matthew Cowley", email = "matthew.v.cowley@gmail.com" },
@@ -38,6 +38,7 @@ dev = ["sphinx", "esbonio", "shibuya", "numpydoc"]
 
 [project.urls]
 Homepage = "https://github.com/yutanagano/nearust"
+Documentation = "https://nearust.readthedocs.io"
 Repository = "https://github.com/yutanagano/nearust"
 Issues = "https://github.com/yutanagano/nearust/issues"
 
