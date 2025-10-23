@@ -4,6 +4,7 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
+use std::io::{Error, ErrorKind};
 use std::usize;
 use std::{hash::Hash, sync::mpsc};
 
@@ -19,14 +20,14 @@ enum CrossComparisonIndex {
 /// hashmap (mapping deletion variants to all the original strings that could have produced that
 /// variant) can be computed beforehand to expedite multiple future queries against that same
 /// reference.
-struct _CachedCrossSymdel {
+struct CachedCrossSymdel {
     references: Vec<String>,
     variant_map: HashMap<String, Vec<usize>>,
     max_distance: usize,
 }
 
-impl _CachedCrossSymdel {
-    fn _new(references: Vec<String>, max_distance: usize) -> Self {
+impl CachedCrossSymdel {
+    fn new(references: Vec<String>, max_distance: usize) -> Self {
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
         let (tx, rx) = mpsc::channel();
@@ -60,11 +61,93 @@ impl _CachedCrossSymdel {
             }
         }
 
-        _CachedCrossSymdel {
+        CachedCrossSymdel {
             references,
             variant_map,
             max_distance,
         }
+    }
+
+    fn symdel(
+        &self,
+        query: &[String],
+        max_distance: usize,
+        zero_index: bool,
+    ) -> Result<Vec<(usize, usize, usize)>, Error> {
+        if max_distance > self.max_distance {
+            return Err(Error::new(ErrorKind::InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, self.max_distance)));
+        }
+
+        let num_vi_pairs = get_num_vi_pairs(query, max_distance);
+        let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
+        let (tx, rx) = mpsc::channel();
+        query
+            .par_iter()
+            .enumerate()
+            .for_each_with(tx, |transmitter, (idx, s)| {
+                let variants = get_deletion_variants(s, max_distance);
+                transmitter.send((idx, variants)).unwrap();
+            });
+
+        for (idx, mut variants) in rx {
+            for variant in variants.drain(..) {
+                variant_index_pairs.push((variant, idx));
+            }
+        }
+
+        variant_index_pairs.par_sort_unstable();
+
+        let mut convergent_indices = Vec::new();
+        let mut total_num_index_pairs = 0;
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .for_each(|group| {
+                let variant = &group[0].0;
+                match self.variant_map.get(variant) {
+                    None => return,
+                    Some(indices_ref) => {
+                        let indices_query = group.iter().map(|(_, idx)| *idx).collect_vec();
+
+                        let num_index_pairs = indices_query.len() * indices_ref.len();
+                        if num_index_pairs == 0 {
+                            return;
+                        }
+                        total_num_index_pairs += num_index_pairs;
+
+                        convergent_indices.push((indices_query, indices_ref));
+                    }
+                }
+            });
+
+        let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
+        let (tx, rx) = mpsc::channel();
+        convergent_indices
+            .par_iter()
+            .for_each_with(tx, |tx, (indices_query, indices_ref)| {
+                let pair_tuples = indices_query
+                    .into_iter()
+                    .cartesian_product(*indices_ref)
+                    .map(|v| (*v.0, *v.1))
+                    .collect_vec();
+                tx.send(pair_tuples).unwrap();
+            });
+
+        for pair_tuples in rx {
+            for pair in pair_tuples {
+                hit_candidates.push(pair);
+            }
+        }
+
+        hit_candidates.par_sort_unstable();
+        hit_candidates.dedup();
+
+        Ok(get_true_hits(
+            &hit_candidates,
+            query,
+            &self.references,
+            max_distance,
+            zero_index,
+        ))
     }
 }
 
