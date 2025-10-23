@@ -1,8 +1,11 @@
+use core::hash::{BuildHasher, Hasher};
+use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::sync::mpsc;
 use std::usize;
+use std::{hash::Hash, sync::mpsc};
 
 pub mod pymod;
 
@@ -10,6 +13,59 @@ pub mod pymod;
 enum CrossComparisonIndex {
     Query(usize),
     Reference(usize),
+}
+
+/// Class for assymetric cross-set symdel where the reference is known beforehand, and a variant
+/// hashmap (mapping deletion variants to all the original strings that could have produced that
+/// variant) can be computed beforehand to expedite multiple future queries against that same
+/// reference.
+struct _CachedCrossSymdel {
+    references: Vec<String>,
+    variant_map: HashMap<String, Vec<usize>>,
+    max_distance: usize,
+}
+
+impl _CachedCrossSymdel {
+    fn _new(references: Vec<String>, max_distance: usize) -> Self {
+        let mut variant_map = HashMap::new();
+        let hash_builder = variant_map.hasher();
+        let (tx, rx) = mpsc::channel();
+
+        references
+            .par_iter()
+            .enumerate()
+            .for_each_with(tx, |transmitter, (idx, s)| {
+                let variants_and_hashes = get_deletion_variants(s, max_distance)
+                    .iter()
+                    .map(|v| {
+                        let mut state = hash_builder.build_hasher();
+                        v.hash(&mut state);
+                        (v.to_owned(), state.finish())
+                    })
+                    .collect_vec();
+                transmitter.send((idx, variants_and_hashes)).unwrap();
+            });
+
+        for (idx, mut variants_and_hashes) in rx {
+            for (variant, precomputed_hash) in variants_and_hashes.drain(..) {
+                match variant_map
+                    .raw_entry_mut()
+                    .from_key_hashed_nocheck(precomputed_hash, &variant)
+                {
+                    RawEntryMut::Vacant(view) => {
+                        view.insert_hashed_nocheck(precomputed_hash, variant, vec![idx]);
+                    }
+                    RawEntryMut::Occupied(mut view) => view.get_mut().push(idx),
+                }
+            }
+        }
+
+        _CachedCrossSymdel {
+            references,
+            variant_map,
+            max_distance,
+        }
+    }
 }
 
 pub fn symdel_within_set(
