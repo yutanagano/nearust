@@ -1,4 +1,4 @@
-use _lib::{symdel_across_sets, symdel_within_set};
+use _lib::{symdel_across_sets, symdel_within_set, CachedCrossSymdel};
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
@@ -178,6 +178,27 @@ mod tests {
         let mut test_output_stream = Vec::new();
 
         let results = symdel_across_sets(&primary_input, &comparison_input, 1, false);
+        write_results(results, &mut test_output_stream);
+
+        assert_eq!(test_output_stream, expected_output);
+    }
+
+    #[test]
+    fn test_cross_cached() {
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
+        let primary_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
+        let comparison_input = get_input_lines_as_ascii(f).unwrap();
+
+        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
+        let mut expected_output = Vec::new();
+        let _ = f.read_to_end(&mut expected_output);
+
+        let mut test_output_stream = Vec::new();
+
+        let ccsd = CachedCrossSymdel::new(comparison_input, 1);
+        let results = ccsd.symdel(&primary_input, 1, false).unwrap();
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);

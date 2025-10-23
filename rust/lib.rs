@@ -20,14 +20,14 @@ enum CrossComparisonIndex {
 /// hashmap (mapping deletion variants to all the original strings that could have produced that
 /// variant) can be computed beforehand to expedite multiple future queries against that same
 /// reference.
-struct CachedCrossSymdel {
+pub struct CachedCrossSymdel {
     references: Vec<String>,
     variant_map: HashMap<String, Vec<usize>>,
     max_distance: usize,
 }
 
 impl CachedCrossSymdel {
-    fn new(references: Vec<String>, max_distance: usize) -> Self {
+    pub fn new(references: Vec<String>, max_distance: usize) -> Self {
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
         let (tx, rx) = mpsc::channel();
@@ -68,7 +68,7 @@ impl CachedCrossSymdel {
         }
     }
 
-    fn symdel(
+    pub fn symdel(
         &self,
         query: &[String],
         max_distance: usize,
