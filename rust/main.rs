@@ -203,4 +203,28 @@ mod tests {
 
         assert_eq!(test_output_stream, expected_output);
     }
+
+    #[test]
+    fn test_cross_cached_against_cached() {
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
+        let primary_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
+        let comparison_input = get_input_lines_as_ascii(f).unwrap();
+
+        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
+        let mut expected_output = Vec::new();
+        let _ = f.read_to_end(&mut expected_output);
+
+        let mut test_output_stream = Vec::new();
+
+        let cached_query = CachedCrossSymdel::new(primary_input, 1);
+        let cached_reference = CachedCrossSymdel::new(comparison_input, 1);
+        let results = cached_reference
+            .symdel_against_hashmap(&cached_query, 1, false)
+            .unwrap();
+        write_results(results, &mut test_output_stream);
+
+        assert_eq!(test_output_stream, expected_output);
+    }
 }
