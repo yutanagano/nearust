@@ -4,11 +4,11 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind::InvalidData};
 use std::usize;
 use std::{hash::Hash, sync::mpsc};
 
-pub mod pymod;
+mod pymod;
 
 #[derive(Debug, Clone, Copy)]
 enum CrossComparisonIndex {
@@ -21,18 +21,18 @@ enum CrossComparisonIndex {
 /// variant) can be computed beforehand to expedite multiple future queries against that same
 /// reference.
 pub struct CachedCrossSymdel {
-    references: Vec<String>,
+    reference: Vec<String>,
     variant_map: HashMap<String, Vec<usize>>,
     max_distance: usize,
 }
 
 impl CachedCrossSymdel {
-    pub fn new(references: Vec<String>, max_distance: usize) -> Self {
+    pub fn new(reference: Vec<String>, max_distance: usize) -> Self {
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
         let (tx, rx) = mpsc::channel();
 
-        references
+        reference
             .par_iter()
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
@@ -62,7 +62,7 @@ impl CachedCrossSymdel {
         }
 
         CachedCrossSymdel {
-            references,
+            reference,
             variant_map,
             max_distance,
         }
@@ -75,7 +75,7 @@ impl CachedCrossSymdel {
         zero_index: bool,
     ) -> Result<Vec<(usize, usize, usize)>, Error> {
         if max_distance > self.max_distance {
-            return Err(Error::new(ErrorKind::InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, self.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, self.max_distance)));
         }
 
         let num_vi_pairs = get_num_vi_pairs(query, max_distance);
@@ -144,7 +144,7 @@ impl CachedCrossSymdel {
         Ok(get_true_hits(
             &hit_candidates,
             query,
-            &self.references,
+            &self.reference,
             max_distance,
             zero_index,
         ))
