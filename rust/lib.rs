@@ -160,27 +160,39 @@ impl CachedSymdel {
 
         let mut convergent_indices = Vec::new();
         let mut total_num_index_pairs = 0;
-
+        let (tx, rx) = mpsc::channel();
         if query.variant_map.len() < self.variant_map.len() {
-            for (variant, indices_query) in query.variant_map.iter() {
-                match self.variant_map.get(variant) {
-                    None => continue,
+            query.variant_map.par_iter().for_each_with(
+                tx,
+                |transmitter, (variant, indices_query)| match self.variant_map.get(variant) {
+                    None => return,
                     Some(indices_ref) => {
-                        total_num_index_pairs += indices_query.len() * indices_ref.len();
-                        convergent_indices.push((indices_query, indices_ref));
+                        let num_index_pairs = indices_query.len() * indices_ref.len();
+                        transmitter
+                            .send((num_index_pairs, (indices_query, indices_ref)))
+                            .unwrap();
                     }
-                }
-            }
+                },
+            );
         } else {
-            for (variant, indices_ref) in self.variant_map.iter() {
-                match query.variant_map.get(variant) {
-                    None => continue,
-                    Some(indices_query) => {
-                        total_num_index_pairs += indices_query.len() * indices_ref.len();
-                        convergent_indices.push((indices_query, indices_ref));
+            self.variant_map
+                .par_iter()
+                .for_each_with(tx, |transmitter, (variant, indices_ref)| {
+                    match query.variant_map.get(variant) {
+                        None => return,
+                        Some(indices_query) => {
+                            let num_index_pairs = indices_query.len() * indices_ref.len();
+                            transmitter
+                                .send((num_index_pairs, (indices_query, indices_ref)))
+                                .unwrap();
+                        }
                     }
-                }
-            }
+                });
+        }
+
+        for (num_index_pairs, indices) in rx {
+            total_num_index_pairs += num_index_pairs;
+            convergent_indices.push(indices);
         }
 
         let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
