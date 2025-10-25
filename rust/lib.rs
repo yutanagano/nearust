@@ -107,13 +107,7 @@ impl CachedCrossSymdel {
                     None => return,
                     Some(indices_ref) => {
                         let indices_query = group.iter().map(|(_, idx)| *idx).collect_vec();
-
-                        let num_index_pairs = indices_query.len() * indices_ref.len();
-                        if num_index_pairs == 0 {
-                            return;
-                        }
-                        total_num_index_pairs += num_index_pairs;
-
+                        total_num_index_pairs += indices_query.len() * indices_ref.len();
                         convergent_indices.push((indices_query, indices_ref));
                     }
                 }
@@ -144,6 +138,76 @@ impl CachedCrossSymdel {
         Ok(get_true_hits(
             &hit_candidates,
             query,
+            &self.reference,
+            max_distance,
+            zero_index,
+        ))
+    }
+
+    pub fn symdel_against_hashmap(
+        &self,
+        query: &Self,
+        max_distance: usize,
+        zero_index: bool,
+    ) -> Result<Vec<(usize, usize, usize)>, Error> {
+        if max_distance > self.max_distance {
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, self.max_distance)));
+        }
+
+        if max_distance > query.max_distance {
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, query.max_distance)));
+        }
+
+        let mut convergent_indices = Vec::new();
+        let mut total_num_index_pairs = 0;
+
+        if query.variant_map.len() < self.variant_map.len() {
+            for (variant, indices_query) in query.variant_map.iter() {
+                match self.variant_map.get(variant) {
+                    None => continue,
+                    Some(indices_ref) => {
+                        total_num_index_pairs += indices_query.len() * indices_ref.len();
+                        convergent_indices.push((indices_query, indices_ref));
+                    }
+                }
+            }
+        } else {
+            for (variant, indices_ref) in self.variant_map.iter() {
+                match query.variant_map.get(variant) {
+                    None => continue,
+                    Some(indices_query) => {
+                        total_num_index_pairs += indices_query.len() * indices_ref.len();
+                        convergent_indices.push((indices_query, indices_ref));
+                    }
+                }
+            }
+        }
+
+        let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
+        let (tx, rx) = mpsc::channel();
+        convergent_indices
+            .par_iter()
+            .for_each_with(tx, |tx, (indices_query, indices_ref)| {
+                let pair_tuples = indices_query
+                    .into_iter()
+                    .cartesian_product(*indices_ref)
+                    .map(|v| (*v.0, *v.1))
+                    .collect_vec();
+                tx.send(pair_tuples).unwrap();
+            });
+
+        for pair_tuples in rx {
+            for pair in pair_tuples {
+                hit_candidates.push(pair);
+            }
+        }
+
+        hit_candidates.par_sort_unstable();
+        hit_candidates.dedup();
+
+        Ok(get_true_hits(
+            &hit_candidates,
+            &query.reference,
             &self.reference,
             max_distance,
             zero_index,
