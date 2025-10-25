@@ -8,19 +8,19 @@ pub mod pymod;
 
 #[derive(Debug, Clone, Copy)]
 enum CrossComparisonIndex {
-    Primary(usize),
-    Comparison(usize),
+    Query(usize),
+    Reference(usize),
 }
 
 pub fn symdel_within_set(
-    strings: &[String],
+    query: &[String],
     max_distance: usize,
     zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
-    let num_vi_pairs = get_num_vi_pairs(strings, max_distance);
+    let num_vi_pairs = get_num_vi_pairs(query, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
-    strings
+    query
         .par_iter()
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
@@ -70,37 +70,37 @@ pub fn symdel_within_set(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(&hit_candidates, strings, strings, max_distance, zero_index)
+    get_true_hits(&hit_candidates, query, query, max_distance, zero_index)
 }
 
 pub fn symdel_across_sets(
-    strings_primary: &[String],
-    strings_comparison: &[String],
+    query: &[String],
+    reference: &[String],
     max_distance: usize,
     zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
-    let num_vi_primary = get_num_vi_pairs(strings_primary, max_distance);
-    let num_vi_comparison = get_num_vi_pairs(strings_comparison, max_distance);
-    let mut variant_index_pairs = Vec::with_capacity(num_vi_primary + num_vi_comparison);
+    let num_vi_query = get_num_vi_pairs(query, max_distance);
+    let num_vi_reference = get_num_vi_pairs(reference, max_distance);
+    let mut variant_index_pairs = Vec::with_capacity(num_vi_query + num_vi_reference);
     let (transmitter, receiver) = mpsc::channel();
-    strings_primary.par_iter().enumerate().for_each_with(
-        transmitter.clone(),
-        |transmitter, (idx, s)| {
+    query
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter.clone(), |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
             transmitter
-                .send((CrossComparisonIndex::Primary(idx), variants))
+                .send((CrossComparisonIndex::Query(idx), variants))
                 .unwrap();
-        },
-    );
-    strings_comparison.par_iter().enumerate().for_each_with(
-        transmitter,
-        |transmitter, (idx, s)| {
+        });
+    reference
+        .par_iter()
+        .enumerate()
+        .for_each_with(transmitter, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
             transmitter
-                .send((CrossComparisonIndex::Comparison(idx), variants))
+                .send((CrossComparisonIndex::Reference(idx), variants))
                 .unwrap();
-        },
-    );
+        });
 
     for (idx, mut variants) in receiver {
         for variant in variants.drain(..) {
@@ -119,31 +119,31 @@ pub fn symdel_across_sets(
                 return;
             }
 
-            let mut indices_primary = Vec::new();
-            let mut indices_comparison = Vec::new();
+            let mut indices_query = Vec::new();
+            let mut indices_reference = Vec::new();
 
             group.iter().for_each(|(_, idx)| match idx {
-                CrossComparisonIndex::Primary(v) => indices_primary.push(*v),
-                CrossComparisonIndex::Comparison(v) => indices_comparison.push(*v),
+                CrossComparisonIndex::Query(v) => indices_query.push(*v),
+                CrossComparisonIndex::Reference(v) => indices_reference.push(*v),
             });
 
-            let num_index_pairs = indices_primary.len() * indices_comparison.len();
+            let num_index_pairs = indices_query.len() * indices_reference.len();
             if num_index_pairs == 0 {
                 return;
             }
 
             total_num_index_pairs += num_index_pairs;
-            convergent_indices.push((indices_primary, indices_comparison));
+            convergent_indices.push((indices_query, indices_reference));
         });
 
     let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
     let (tx, rx) = mpsc::channel();
     convergent_indices
         .par_iter()
-        .for_each_with(tx, |tx, (indices_primary, indices_comparison)| {
-            let pair_tuples = indices_primary
+        .for_each_with(tx, |tx, (indices_query, indices_reference)| {
+            let pair_tuples = indices_query
                 .into_iter()
-                .cartesian_product(indices_comparison)
+                .cartesian_product(indices_reference)
                 .map(|v| (*v.0, *v.1))
                 .collect_vec();
             tx.send(pair_tuples).unwrap();
@@ -158,13 +158,7 @@ pub fn symdel_across_sets(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(
-        &hit_candidates,
-        strings_primary,
-        strings_comparison,
-        max_distance,
-        zero_index,
-    )
+    get_true_hits(&hit_candidates, query, reference, max_distance, zero_index)
 }
 
 fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
@@ -236,27 +230,27 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
 /// Examine and double check hits to see if they are real
 fn get_true_hits(
     hit_candidates: &[(usize, usize)],
-    strings_primary: &[String],
-    strings_comparison: &[String],
+    query: &[String],
+    reference: &[String],
     max_distance: usize,
     zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
         .par_iter()
-        .map(|(idx_primary, idx_comparison)| {
-            let anchor = &strings_primary[*idx_primary];
-            let comparison = &strings_comparison[*idx_comparison];
-            let dist = if (anchor.len() > comparison.len()
-                && anchor.len() - comparison.len() == max_distance)
-                || (anchor.len() < comparison.len()
-                    && comparison.len() - anchor.len() == max_distance)
+        .map(|(idx_query, idx_reference)| {
+            let string_query = &query[*idx_query];
+            let string_reference = &reference[*idx_reference];
+            let dist = if (string_query.len() > string_reference.len()
+                && string_query.len() - string_reference.len() == max_distance)
+                || (string_query.len() < string_reference.len()
+                    && string_reference.len() - string_query.len() == max_distance)
             {
                 max_distance
             } else {
-                levenshtein::distance(anchor.chars(), comparison.chars())
+                levenshtein::distance(string_query.chars(), string_reference.chars())
             };
 
-            (*idx_primary, *idx_comparison, dist)
+            (*idx_query, *idx_reference, dist)
         })
         .collect();
 

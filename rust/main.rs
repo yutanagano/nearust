@@ -7,11 +7,11 @@ use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
 ///
-/// If you provide nearust with a path to a [FILE_PRIMARY], it will read its contents for input. If
+/// If you provide nearust with a path to a [FILE_QUERY], it will read its contents for input. If
 /// no path is supplied, nearust will read from the standard input until it receives an EOF signal.
 /// Nearust will then look for pairs of similar strings within its input, where each line of text
 /// is treated as an individual string. You can also supply nearust with two paths -- a
-/// [FILE_PRIMARY] and [FILE_COMPARISON], in which case the program will look for pairs of similar
+/// [FILE_QUERY] and [FILE_REFERENCE], in which case the program will look for pairs of similar
 /// strings across the contents of the two files. Currently, only valid ASCII input is supported.
 ///
 /// By default, the threshold (Levenshtein) edit distance at or below which a pair of strings are
@@ -20,9 +20,9 @@ use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
 /// Nearust's output is plain text, where each line encodes a detected pair of similar input
 /// strings. Each line is comprised of three integers separated by commas, which represent, in
 /// respective order: the (1-indexed) line number of the string from the primary input (i.e. stdin
-/// or [FILE_PRIMARY]), the (1-indexed) line number of the string from the secondary input (i.e.
-/// stdin or [FILE_PRIMARY] if one input, or [FILE_COMPARISON] if two inputs), and the
-/// (Levenshtein) edit distance between the similar strings.
+/// or [FILE_QUERY]), the (1-indexed) line number of the string from the secondary input (i.e.
+/// stdin or [FILE_QUERY] if one input, or [FILE_REFERENCE] if two inputs), and the (Levenshtein)
+/// edit distance between the similar strings.
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Args {
@@ -38,12 +38,12 @@ struct Args {
     #[arg(short, long, action = ArgAction::SetTrue)]
     zero_index: bool,
 
-    /// Primary input file (if absent program reads from stdin until EOF).
-    file_primary: Option<String>,
+    /// Primary input (if absent program reads from stdin until EOF).
+    file_query: Option<String>,
 
-    /// If provided, searches for pairs of similar strings between the primary input file and the
-    /// comparison input file.
-    file_comparison: Option<String>,
+    /// If provided, searches for pairs of similar strings between the query file and the reference
+    /// file.
+    file_reference: Option<String>,
 }
 
 /// Reads (blocking) all lines from in_stream until EOF, and converts the data into a vector of
@@ -61,7 +61,7 @@ fn main() {
         .build_global()
         .unwrap_or_else(|_| panic!("global thread pool cannot be initialised more than once"));
 
-    let primary_input = match args.file_primary {
+    let primary_input = match args.file_query {
         Some(path) => {
             let reader = get_file_bufreader(&path);
             get_input_lines_as_ascii(reader)
@@ -74,7 +74,7 @@ fn main() {
         }
     };
 
-    let results = match args.file_comparison {
+    let results = match args.file_reference {
         Some(path) => {
             let comparison_reader = get_file_bufreader(&path);
             let comparison_input = get_input_lines_as_ascii(comparison_reader)

@@ -2,26 +2,26 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 
 #[pyfunction]
 fn symdel_within_set(
-    strings: Vec<String>,
+    query: Vec<String>,
     max_distance: usize,
     zero_index: bool,
 ) -> PyResult<Vec<(usize, usize, usize)>> {
-    check_strings_ascii(&strings)?;
-    Ok(super::symdel_within_set(&strings, max_distance, zero_index))
+    check_strings_ascii(&query)?;
+    Ok(super::symdel_within_set(&query, max_distance, zero_index))
 }
 
 #[pyfunction]
 fn symdel_across_sets(
-    strings_primary: Vec<String>,
-    strings_comparison: Vec<String>,
+    query: Vec<String>,
+    reference: Vec<String>,
     max_distance: usize,
     zero_index: bool,
 ) -> PyResult<Vec<(usize, usize, usize)>> {
-    check_strings_ascii(&strings_primary)?;
-    check_strings_ascii(&strings_comparison)?;
+    check_strings_ascii(&query)?;
+    check_strings_ascii(&reference)?;
     Ok(super::symdel_across_sets(
-        &strings_primary,
-        &strings_comparison,
+        &query,
+        &reference,
         max_distance,
         zero_index,
     ))
