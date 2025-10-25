@@ -1,4 +1,4 @@
-use _lib::{symdel_across_sets, symdel_within_set, CachedCrossSymdel};
+use _lib::{symdel_cross, symdel_within, CachedSymdel};
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
@@ -80,14 +80,14 @@ fn main() {
             let comparison_input = get_input_lines_as_ascii(comparison_reader)
                 .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
 
-            symdel_across_sets(
+            symdel_cross(
                 &primary_input,
                 &comparison_input,
                 args.max_distance,
                 args.zero_index,
             )
         }
-        None => symdel_within_set(&primary_input, args.max_distance, args.zero_index),
+        None => symdel_within(&primary_input, args.max_distance, args.zero_index),
     };
     write_results(results, &mut stdout);
 }
@@ -155,7 +155,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let results = symdel_within_set(&test_input, 1, false);
+        let results = symdel_within(&test_input, 1, false);
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
@@ -177,7 +177,7 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let results = symdel_across_sets(&primary_input, &comparison_input, 1, false);
+        let results = symdel_cross(&primary_input, &comparison_input, 1, false);
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
@@ -197,8 +197,8 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let ccsd = CachedCrossSymdel::new(comparison_input, 1);
-        let results = ccsd.symdel(&primary_input, 1, false).unwrap();
+        let ccsd = CachedSymdel::new(comparison_input, 1);
+        let results = ccsd.symdel_cross(&primary_input, 1, false).unwrap();
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
@@ -218,10 +218,10 @@ mod tests {
 
         let mut test_output_stream = Vec::new();
 
-        let cached_query = CachedCrossSymdel::new(primary_input, 1);
-        let cached_reference = CachedCrossSymdel::new(comparison_input, 1);
+        let cached_query = CachedSymdel::new(primary_input, 1);
+        let cached_reference = CachedSymdel::new(comparison_input, 1);
         let results = cached_reference
-            .symdel_against_hashmap(&cached_query, 1, false)
+            .symdel_cross_against_cached(&cached_query, 1, false)
             .unwrap();
         write_results(results, &mut test_output_stream);
 

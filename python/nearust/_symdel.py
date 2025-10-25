@@ -68,16 +68,23 @@ def symdel(
     [(1, 2, 1), (2, 3, 1)]
     """
     if reference is not None:
-        return rustlib.symdel_across_sets(query, reference, max_distance, zero_index)
+        return rustlib.symdel_cross(query, reference, max_distance, zero_index)
 
-    return rustlib.symdel_within_set(query, max_distance, zero_index)
+    return rustlib.symdel_within(query, max_distance, zero_index)
 
 
-class CachedCrossSymdel:
+class CachedSymdel:
     def __init__(self, reference: Iterable[str], max_distance: int = 1) -> None:
-        self._internal = rustlib.CachedCrossSymdel(reference, max_distance)
+        self._internal = rustlib.CachedSymdel(reference, max_distance)
 
     def symdel(
-        self, query: Iterable[str], max_distance: int = 1, zero_index: bool = True
+        self,
+        query: Iterable[str] | "CachedSymdel",
+        max_distance: int = 1,
+        zero_index: bool = True,
     ) -> list[tuple[int, int, int]]:
-        return self._internal.symdel(query, max_distance, zero_index)
+        if isinstance(query, CachedSymdel):
+            return self._internal.symdel_cross_against_cached(
+                query._internal, max_distance, zero_index
+            )
+        return self._internal.symdel_cross(query, max_distance, zero_index)

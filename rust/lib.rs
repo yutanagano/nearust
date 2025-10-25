@@ -20,13 +20,13 @@ enum CrossComparisonIndex {
 /// hashmap (mapping deletion variants to all the original strings that could have produced that
 /// variant) can be computed beforehand to expedite multiple future queries against that same
 /// reference.
-pub struct CachedCrossSymdel {
+pub struct CachedSymdel {
     reference: Vec<String>,
     variant_map: HashMap<String, Vec<usize>>,
     max_distance: usize,
 }
 
-impl CachedCrossSymdel {
+impl CachedSymdel {
     pub fn new(reference: Vec<String>, max_distance: usize) -> Self {
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
@@ -61,21 +61,21 @@ impl CachedCrossSymdel {
             }
         }
 
-        CachedCrossSymdel {
+        CachedSymdel {
             reference,
             variant_map,
             max_distance,
         }
     }
 
-    pub fn symdel(
+    pub fn symdel_cross(
         &self,
         query: &[String],
         max_distance: usize,
         zero_index: bool,
     ) -> Result<Vec<(usize, usize, usize)>, Error> {
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, self.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
 
         let num_vi_pairs = get_num_vi_pairs(query, max_distance);
@@ -144,18 +144,18 @@ impl CachedCrossSymdel {
         ))
     }
 
-    pub fn symdel_against_hashmap(
+    pub fn symdel_cross_against_cached(
         &self,
         query: &Self,
         max_distance: usize,
         zero_index: bool,
     ) -> Result<Vec<(usize, usize, usize)>, Error> {
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, self.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
 
         if max_distance > query.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance supplied when constructing the cached hashmap ({})", max_distance, query.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance, query.max_distance)));
         }
 
         let mut convergent_indices = Vec::new();
@@ -215,7 +215,7 @@ impl CachedCrossSymdel {
     }
 }
 
-pub fn symdel_within_set(
+pub fn symdel_within(
     query: &[String],
     max_distance: usize,
     zero_index: bool,
@@ -276,7 +276,7 @@ pub fn symdel_within_set(
     get_true_hits(&hit_candidates, query, query, max_distance, zero_index)
 }
 
-pub fn symdel_across_sets(
+pub fn symdel_cross(
     query: &[String],
     reference: &[String],
     max_distance: usize,
@@ -285,11 +285,11 @@ pub fn symdel_across_sets(
     let num_vi_query = get_num_vi_pairs(query, max_distance);
     let num_vi_reference = get_num_vi_pairs(reference, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_query + num_vi_reference);
-    let (transmitter, receiver) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     query
         .par_iter()
         .enumerate()
-        .for_each_with(transmitter.clone(), |transmitter, (idx, s)| {
+        .for_each_with(tx.clone(), |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
             transmitter
                 .send((CrossComparisonIndex::Query(idx), variants))
@@ -298,14 +298,14 @@ pub fn symdel_across_sets(
     reference
         .par_iter()
         .enumerate()
-        .for_each_with(transmitter, |transmitter, (idx, s)| {
+        .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
             transmitter
                 .send((CrossComparisonIndex::Reference(idx), variants))
                 .unwrap();
         });
 
-    for (idx, mut variants) in receiver {
+    for (idx, mut variants) in rx {
         for variant in variants.drain(..) {
             variant_index_pairs.push((variant, idx));
         }
