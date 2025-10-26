@@ -1,8 +1,8 @@
-use _lib::{symdel_cross, symdel_within, CachedSymdel};
+use _lib::{get_input_lines_as_ascii, symdel_cross, symdel_within, write_results};
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind, Write};
+use std::io::{self, BufReader, BufWriter};
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
@@ -92,139 +92,9 @@ fn main() {
     write_results(results, &mut stdout);
 }
 
-/// Write to stdout
-fn write_results(results: Vec<(usize, usize, usize)>, writer: &mut impl Write) {
-    for (a_idx_to_write, c_idx_to_write, dist) in results.iter() {
-        write!(writer, "{},{},{}\n", a_idx_to_write, c_idx_to_write, dist).unwrap();
-    }
-}
-
 /// Get a buffered reader to a file at path.
 fn get_file_bufreader(path: &str) -> BufReader<File> {
     let file =
         File::open(&path).unwrap_or_else(|e| panic!("failed to open {}: {}", &path, e.to_string()));
     BufReader::new(file)
-}
-
-/// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
-/// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
-/// is guaranteed to only contain ASCII bytes.
-fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
-    let mut strings = Vec::new();
-
-    for (idx, line) in in_stream.lines().enumerate() {
-        let line_unwrapped = line?;
-
-        if !line_unwrapped.is_ascii() {
-            let err_msg = format!(
-                "non-ASCII data is currently unsupported (\"{}\" from input line {})",
-                line_unwrapped,
-                idx + 1
-            );
-            return Err(Error::new(ErrorKind::InvalidData, err_msg));
-        }
-
-        strings.push(line_unwrapped);
-    }
-
-    Ok(strings)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use io::Read;
-
-    #[test]
-    fn test_get_input_lines_as_ascii() {
-        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
-        let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
-        assert_eq!(strings, expected);
-    }
-
-    /// Run this test from the project home directory so that the test CDR3 text files can be found
-    /// at the expected paths
-    #[test]
-    fn test_within() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let test_input = get_input_lines_as_ascii(f).unwrap();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
-
-        let mut test_output_stream = Vec::new();
-
-        let results = symdel_within(&test_input, 1, false);
-        write_results(results, &mut test_output_stream);
-
-        assert_eq!(test_output_stream, expected_output);
-    }
-
-    /// Run this test from the project home directory so that the test CDR3 text files can be found
-    /// at the expected paths
-    #[test]
-    fn test_cross() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let primary_input = get_input_lines_as_ascii(f).unwrap();
-
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-        let comparison_input = get_input_lines_as_ascii(f).unwrap();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
-
-        let mut test_output_stream = Vec::new();
-
-        let results = symdel_cross(&primary_input, &comparison_input, 1, false);
-        write_results(results, &mut test_output_stream);
-
-        assert_eq!(test_output_stream, expected_output);
-    }
-
-    #[test]
-    fn test_cross_cached() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let primary_input = get_input_lines_as_ascii(f).unwrap();
-
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-        let comparison_input = get_input_lines_as_ascii(f).unwrap();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
-
-        let mut test_output_stream = Vec::new();
-
-        let ccsd = CachedSymdel::new(comparison_input, 1);
-        let results = ccsd.symdel_cross(&primary_input, 1, false).unwrap();
-        write_results(results, &mut test_output_stream);
-
-        assert_eq!(test_output_stream, expected_output);
-    }
-
-    #[test]
-    fn test_cross_cached_against_cached() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let primary_input = get_input_lines_as_ascii(f).unwrap();
-
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-        let comparison_input = get_input_lines_as_ascii(f).unwrap();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
-
-        let mut test_output_stream = Vec::new();
-
-        let cached_query = CachedSymdel::new(primary_input, 1);
-        let cached_reference = CachedSymdel::new(comparison_input, 1);
-        let results = cached_reference
-            .symdel_cross_against_cached(&cached_query, 1, false)
-            .unwrap();
-        write_results(results, &mut test_output_stream);
-
-        assert_eq!(test_output_stream, expected_output);
-    }
 }
