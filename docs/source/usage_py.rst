@@ -14,7 +14,14 @@ the Python bindings report string pairs using 0-based indexing by default,
 since the Python language uses 0-based indexing in general. Please see below
 for more detail.
 
+Functional API
+--------------
+
 .. autofunction:: nearust.symdel
+
+
+Class-based (memoized) API
+--------------------------
 
 .. autoclass:: nearust.CachedSymdel
    :members:
