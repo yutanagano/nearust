@@ -1,17 +1,66 @@
 use pyo3::{exceptions::PyValueError, prelude::*};
+use std::usize;
+
+#[pyclass]
+struct CachedSymdel {
+    internal: super::CachedSymdel,
+}
+
+#[pymethods]
+impl CachedSymdel {
+    #[new]
+    fn new(reference: Vec<String>, max_distance: usize) -> PyResult<Self> {
+        check_strings_ascii(&reference)?;
+        let internal = super::CachedSymdel::new(reference, max_distance);
+        Ok(CachedSymdel { internal })
+    }
+
+    fn symdel_within(
+        &self,
+        max_distance: usize,
+        zero_index: bool,
+    ) -> PyResult<Vec<(usize, usize, usize)>> {
+        self.internal
+            .symdel_within(max_distance, zero_index)
+            .map_err(PyValueError::new_err)
+    }
+
+    fn symdel_cross(
+        &self,
+        query: Vec<String>,
+        max_distance: usize,
+        zero_index: bool,
+    ) -> PyResult<Vec<(usize, usize, usize)>> {
+        check_strings_ascii(&query)?;
+        self.internal
+            .symdel_cross(&query, max_distance, zero_index)
+            .map_err(PyValueError::new_err)
+    }
+
+    fn symdel_cross_against_cached(
+        &self,
+        query: PyRef<Self>,
+        max_distance: usize,
+        zero_index: bool,
+    ) -> PyResult<Vec<(usize, usize, usize)>> {
+        self.internal
+            .symdel_cross_against_cached(&query.internal, max_distance, zero_index)
+            .map_err(PyValueError::new_err)
+    }
+}
 
 #[pyfunction]
-fn symdel_within_set(
+fn symdel_within(
     query: Vec<String>,
     max_distance: usize,
     zero_index: bool,
 ) -> PyResult<Vec<(usize, usize, usize)>> {
     check_strings_ascii(&query)?;
-    Ok(super::symdel_within_set(&query, max_distance, zero_index))
+    Ok(super::symdel_within(&query, max_distance, zero_index))
 }
 
 #[pyfunction]
-fn symdel_across_sets(
+fn symdel_cross(
     query: Vec<String>,
     reference: Vec<String>,
     max_distance: usize,
@@ -19,7 +68,7 @@ fn symdel_across_sets(
 ) -> PyResult<Vec<(usize, usize, usize)>> {
     check_strings_ascii(&query)?;
     check_strings_ascii(&reference)?;
-    Ok(super::symdel_across_sets(
+    Ok(super::symdel_cross(
         &query,
         &reference,
         max_distance,
@@ -40,7 +89,8 @@ fn check_strings_ascii(strings: &[String]) -> Result<(), PyErr> {
 
 #[pymodule]
 fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(symdel_within_set, m)?)?;
-    m.add_function(wrap_pyfunction!(symdel_across_sets, m)?)?;
+    m.add_function(wrap_pyfunction!(symdel_within, m)?)?;
+    m.add_function(wrap_pyfunction!(symdel_cross, m)?)?;
+    m.add_class::<CachedSymdel>()?;
     Ok(())
 }
