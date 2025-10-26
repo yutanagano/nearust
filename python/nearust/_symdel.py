@@ -39,6 +39,7 @@ def symdel(
     Provide one iterable over strings to look for pairs of similar strings
     within it.
 
+    >>> import nearust
     >>> nearust.symdel(["fizz", "fuzz", "buzz"])
     [(0, 1, 1), (1, 2, 1)]
 
