@@ -441,15 +441,14 @@ fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
     strings
         .iter()
         .map(|s| {
-            (0..=max_distance)
-                .map(|k| {
-                    if s.len() < k {
-                        0
-                    } else {
-                        get_num_k_combs(s.len(), k)
-                    }
-                })
-                .sum::<usize>()
+            let mut num_vi_pairs = 0;
+            for k in 0..=max_distance {
+                if k > s.len() {
+                    break;
+                }
+                num_vi_pairs += get_num_k_combs(s.len(), k);
+            }
+            num_vi_pairs
         })
         .sum()
 }
