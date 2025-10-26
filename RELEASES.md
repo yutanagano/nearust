@@ -1,3 +1,9 @@
+## Version 0.5.1
+
+- Performance improvements
+- Fixed bug that prevented users from specifying a `max_distance` greater than
+  the length of the shortest string in the input sets
+
 ## Version 0.5.0
 
 - Implement a memoized implementation of symdel for use in the Python package
