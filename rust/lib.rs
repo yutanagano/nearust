@@ -38,11 +38,11 @@ impl CachedSymdel {
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
                 let variants_and_hashes = get_deletion_variants(s, max_distance)
-                    .iter()
+                    .into_iter()
                     .map(|v| {
                         let mut state = hash_builder.build_hasher();
                         v.hash(&mut state);
-                        (v.to_owned(), state.finish())
+                        (v, state.finish())
                     })
                     .collect_vec();
                 transmitter.send((idx, variants_and_hashes)).unwrap();
@@ -441,7 +441,7 @@ fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
     strings
         .iter()
         .map(|s| {
-            (0..max_distance)
+            (0..=max_distance)
                 .map(|k| get_num_k_combs(s.len(), k))
                 .sum::<usize>()
         })
@@ -594,6 +594,13 @@ mod tests {
 
         let result = get_num_k_combs(5, 0);
         assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn test_get_num_vi_pairs() {
+        let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
+        let result = get_num_vi_pairs(&strings, 1);
+        assert_eq!(result, 12);
     }
 
     #[test]
