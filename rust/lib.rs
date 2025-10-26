@@ -38,11 +38,11 @@ impl CachedSymdel {
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
                 let variants_and_hashes = get_deletion_variants(s, max_distance)
-                    .iter()
+                    .into_iter()
                     .map(|v| {
                         let mut state = hash_builder.build_hasher();
                         v.hash(&mut state);
-                        (v.to_owned(), state.finish())
+                        (v, state.finish())
                     })
                     .collect_vec();
                 transmitter.send((idx, variants_and_hashes)).unwrap();
@@ -441,8 +441,14 @@ fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
     strings
         .iter()
         .map(|s| {
-            (0..max_distance)
-                .map(|k| get_num_k_combs(s.len(), k))
+            (0..=max_distance)
+                .map(|k| {
+                    if s.len() < k {
+                        0
+                    } else {
+                        get_num_k_combs(s.len(), k)
+                    }
+                })
                 .sum::<usize>()
         })
         .sum()
@@ -597,21 +603,37 @@ mod tests {
     }
 
     #[test]
+    fn test_get_num_vi_pairs() {
+        let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
+        let result = get_num_vi_pairs(&strings, 1);
+        assert_eq!(result, 12);
+    }
+
+    #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants("foo", 1);
-        let mut expected: Vec<String> = Vec::new();
-        expected.push("fo".into());
-        expected.push("foo".into());
-        expected.push("oo".into());
+        let expected = vec!["fo".to_string(), "foo".to_string(), "oo".to_string()];
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants("foo", 2);
-        let mut expected: Vec<String> = Vec::new();
-        expected.push("f".into());
-        expected.push("fo".into());
-        expected.push("foo".into());
-        expected.push("o".into());
-        expected.push("oo".into());
+        let expected = vec![
+            "f".to_string(),
+            "fo".to_string(),
+            "foo".to_string(),
+            "o".to_string(),
+            "oo".to_string(),
+        ];
+        assert_eq!(variants, expected);
+
+        let variants = get_deletion_variants("foo", 10);
+        let expected = vec![
+            "".to_string(),
+            "f".to_string(),
+            "fo".to_string(),
+            "foo".to_string(),
+            "o".to_string(),
+            "oo".to_string(),
+        ];
         assert_eq!(variants, expected);
     }
 
