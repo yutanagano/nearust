@@ -1,3 +1,7 @@
+## Version 0.5.0
+
+- Implement a memoized implementation of symdel for use in the Python package
+
 ## Version 0.4.0
 
 - Add Python bindings
