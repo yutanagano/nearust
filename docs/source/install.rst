@@ -40,7 +40,7 @@ From source
    Python bindings are only available from versions 0.3 and onwards.
 
 From your Python environment, run the following replacing ``<VERSION_TAG>``
-with the appropriate version specifier (e.g. ``v0.4.0``). The latest release
+with the appropriate version specifier (e.g. ``v0.5.0``). The latest release
 tags can be found by checking the 'releases' section on the github repository
 page.
 
