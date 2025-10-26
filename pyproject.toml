@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nearust"
 requires-python = ">=3.10"
-version = "0.5.0"
+version = "0.5.1"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
   { name = "Matthew Cowley", email = "matthew.v.cowley@gmail.com" },
