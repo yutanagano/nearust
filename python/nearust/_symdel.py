@@ -25,14 +25,16 @@ def symdel(
     -------
     list of tuple of int, int, int
         A list of integer triplets, where each triplet describes a pair of
-        strings that were detected as being neighbours, where the first two
-        ints describe the indices of the two strings in the pair, and the third
-        int describes the Levenshtein edit distance between them. If symdel was
-        only given `query` as input, then it returns pairs of strings from
-        within `query` that are neighbours. If symdel was given both `query`
-        and `reference`, then it returns string pairs across the two sets,
-        where the first index always corresponds to a string from `query`, and
-        the second index always corresponds to a string from `reference`.
+        strings that were detected as being neighbours. The first two ints
+        describe the indices of the two strings in the pair, and the third
+        int describes the Levenshtein edit distance between them.
+
+        If symdel was only given `query` as input, then it returns pairs of
+        strings from within `query` that are neighbours. If symdel was given
+        both `query` and `reference`, then it returns string pairs across the
+        two sets. In this case, the first index always corresponds to a string
+        from `query`, and the second index always corresponds to a string from
+        `reference`.
 
     Examples
     --------
@@ -141,6 +143,7 @@ class CachedSymdel:
         reference and stores the results in a hashmap held internally by the
         instance.
 
+        >>> import nearust
         >>> cached = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"])
 
         Then, call the symdel method with `query` set to an iterable over query
