@@ -51,6 +51,6 @@ page.
 You can also clone the repository, and from within your Python environment,
 navigate to the project root directory and run:
 
-.. code-block:: bash
+.. code-block:: console
 
 	$ pip install .
