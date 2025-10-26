@@ -79,7 +79,7 @@ class CachedSymdel:
 
     def symdel(
         self,
-        query: Iterable[str] | "CachedSymdel" | None,
+        query: Iterable[str] | "CachedSymdel" | None = None,
         max_distance: int = 1,
         zero_index: bool = True,
     ) -> list[tuple[int, int, int]]:
