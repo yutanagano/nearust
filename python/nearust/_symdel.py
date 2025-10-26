@@ -169,8 +169,8 @@ class CachedSymdel:
         `max_distance` equal to X, it `max_distance` must be set to X or
         greater at construction time.
 
-        >>> cached = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
-        >>> cached.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
+        >>> cached_maxd2 = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
+        >>> cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
         [(0, 2, 2), (0, 3, 2), (1, 2, 2), (1, 3, 1), (2, 2, 1), (2, 3, 0)]
         """
         if query is None:
