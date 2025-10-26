@@ -15,6 +15,16 @@ impl CachedSymdel {
         Ok(CachedSymdel { internal })
     }
 
+    fn symdel_within(
+        &self,
+        max_distance: usize,
+        zero_index: bool,
+    ) -> PyResult<Vec<(usize, usize, usize)>> {
+        self.internal
+            .symdel_within(max_distance, zero_index)
+            .map_err(PyValueError::new_err)
+    }
+
     fn symdel_cross(
         &self,
         query: Vec<String>,

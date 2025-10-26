@@ -79,12 +79,16 @@ class CachedSymdel:
 
     def symdel(
         self,
-        query: Iterable[str] | "CachedSymdel",
+        query: Iterable[str] | "CachedSymdel" | None,
         max_distance: int = 1,
         zero_index: bool = True,
     ) -> list[tuple[int, int, int]]:
+        if query is None:
+            return self._internal.symdel_within(max_distance, zero_index)
+
         if isinstance(query, CachedSymdel):
             return self._internal.symdel_cross_against_cached(
                 query._internal, max_distance, zero_index
             )
+
         return self._internal.symdel_cross(query, max_distance, zero_index)
