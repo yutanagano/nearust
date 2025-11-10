@@ -670,7 +670,7 @@ mod tests {
         expected_output.clear();
         test_output_stream.clear();
 
-        f = BufReader::new(File::open("test_files/results_10k_a_d2.txt").unwrap());
+        let mut f = BufReader::new(File::open("test_files/results_10k_a_d2.txt").unwrap());
         f.read_to_end(&mut expected_output).unwrap();
 
         let results = symdel_within(&test_input, 2, false);
@@ -689,11 +689,21 @@ mod tests {
 
         let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
         let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
+        f.read_to_end(&mut expected_output).unwrap();
 
         let mut test_output_stream = Vec::new();
-
         let results = symdel_cross(&primary_input, &comparison_input, 1, false);
+        write_results(results, &mut test_output_stream);
+
+        assert_eq!(test_output_stream, expected_output);
+
+        expected_output.clear();
+        test_output_stream.clear();
+
+        let mut f = BufReader::new(File::open("test_files/results_10k_cross_d2.txt").unwrap());
+        f.read_to_end(&mut expected_output).unwrap();
+
+        let results = symdel_cross(&primary_input, &comparison_input, 2, false);
         write_results(results, &mut test_output_stream);
 
         assert_eq!(test_output_stream, expected_output);
