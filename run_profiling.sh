@@ -1,15 +1,15 @@
 #! /bin/sh
 echo "NOTE: make sure you are running this shell script from outside the Python venv or else rustc will complain about some linking issues"
 
-CURRENT_COMMIT=$(git rev-parse --short HEAD)
-CURRENT_TIME=$(date -Iseconds)
-
 echo "Building CLI binary..."
 RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
 
 echo "Building Python package..."
 source ./.venv/bin/activate
 pip install .[dev]
+
+CURRENT_COMMIT=$(python ./profiling/scripts/get_version.py)
+CURRENT_TIME=$(date -Iseconds)
 
 if [ ! -d "profiling/results" ]; then
   mkdir "profiling/results"
