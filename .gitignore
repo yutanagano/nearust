@@ -3,7 +3,7 @@
 /flamegraph.svg
 /test_files_extra
 /docs/build
-/profiling
+/profiling/results
 .venv
 *pycache*
 *egg-info*

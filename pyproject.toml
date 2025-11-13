@@ -34,7 +34,7 @@ classifiers = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
-dev = ["sphinx", "esbonio", "shibuya", "numpydoc"]
+dev = ["sphinx", "esbonio", "shibuya", "numpydoc", "pandas", "memray"]
 
 [project.urls]
 Homepage = "https://github.com/yutanagano/nearust"
