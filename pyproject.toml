@@ -1,11 +1,10 @@
 [build-system]
-requires = ["setuptools", "setuptools-rust"]
+requires = ["setuptools", "setuptools-rust", "setuptools-scm[simple]"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nearust"
 requires-python = ">=3.10"
-version = "0.5.1"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
   { name = "Matthew Cowley", email = "matthew.v.cowley@gmail.com" },
@@ -32,6 +31,7 @@ classifiers = [
   "Topic :: Text Processing",
   "Topic :: Scientific/Engineering",
 ]
+dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = ["sphinx", "esbonio", "shibuya", "numpydoc"]
