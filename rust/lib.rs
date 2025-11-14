@@ -121,7 +121,7 @@ impl CachedSymdel {
         hit_candidates.dedup();
 
         Ok(get_true_hits(
-            &hit_candidates,
+            hit_candidates,
             &self.reference,
             &self.reference,
             max_distance,
@@ -197,7 +197,7 @@ impl CachedSymdel {
         hit_candidates.dedup();
 
         Ok(get_true_hits(
-            &hit_candidates,
+            hit_candidates,
             query,
             &self.reference,
             max_distance,
@@ -279,7 +279,7 @@ impl CachedSymdel {
         hit_candidates.dedup();
 
         Ok(get_true_hits(
-            &hit_candidates,
+            hit_candidates,
             &query.reference,
             &self.reference,
             max_distance,
@@ -346,7 +346,7 @@ pub fn symdel_within(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(&hit_candidates, query, query, max_distance, zero_index)
+    get_true_hits(hit_candidates, query, query, max_distance, zero_index)
 }
 
 pub fn symdel_cross(
@@ -434,7 +434,7 @@ pub fn symdel_cross(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(&hit_candidates, query, reference, max_distance, zero_index)
+    get_true_hits(hit_candidates, query, reference, max_distance, zero_index)
 }
 
 fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
@@ -513,17 +513,17 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
 
 /// Examine and double check hits to see if they are real
 fn get_true_hits(
-    hit_candidates: &[(usize, usize)],
+    hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
     max_distance: usize,
     zero_index: bool,
 ) -> Vec<(usize, usize, usize)> {
     let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
-        .par_iter()
+        .into_par_iter()
         .map(|(idx_query, idx_reference)| {
-            let string_query = &query[*idx_query];
-            let string_reference = &reference[*idx_reference];
+            let string_query = &query[idx_query];
+            let string_reference = &reference[idx_reference];
             let dist = if (string_query.len() > string_reference.len()
                 && string_query.len() - string_reference.len() == max_distance)
                 || (string_query.len() < string_reference.len()
@@ -534,25 +534,21 @@ fn get_true_hits(
                 levenshtein::distance(string_query.chars(), string_reference.chars())
             };
 
-            (*idx_query, *idx_reference, dist)
+            (idx_query, idx_reference, dist)
         })
         .collect();
 
-    let mut results = Vec::new();
-    for (a_idx, c_idx, dist) in candidates_with_dist {
-        if dist > max_distance {
-            continue;
-        }
-
-        let (a_idx_to_write, c_idx_to_write) = if zero_index {
-            (a_idx, c_idx)
-        } else {
-            (a_idx + 1, c_idx + 1)
-        };
-
-        results.push((a_idx_to_write, c_idx_to_write, dist));
-    }
-    results
+    candidates_with_dist
+        .into_iter()
+        .filter(|(_, _, dist)| *dist <= max_distance)
+        .map(|(qidx, refidx, dist)| {
+            if zero_index {
+                (qidx, refidx, dist)
+            } else {
+                (qidx + 1, refidx + 1, dist)
+            }
+        })
+        .collect_vec()
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
