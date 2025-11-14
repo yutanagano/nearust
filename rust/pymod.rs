@@ -10,7 +10,7 @@ struct CachedSymdel {
 #[pymethods]
 impl CachedSymdel {
     #[new]
-    fn new(reference: Vec<String>, max_distance: usize) -> PyResult<Self> {
+    fn new(reference: Vec<String>, max_distance: u8) -> PyResult<Self> {
         check_strings_ascii(&reference)?;
         let internal = super::CachedSymdel::new(reference, max_distance);
         Ok(CachedSymdel { internal })
@@ -18,9 +18,9 @@ impl CachedSymdel {
 
     fn symdel_within(
         &self,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         self.internal
             .symdel_within(max_distance, zero_index)
             .map_err(PyValueError::new_err)
@@ -29,9 +29,9 @@ impl CachedSymdel {
     fn symdel_cross(
         &self,
         query: Vec<String>,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         check_strings_ascii(&query)?;
         self.internal
             .symdel_cross(&query, max_distance, zero_index)
@@ -41,9 +41,9 @@ impl CachedSymdel {
     fn symdel_cross_against_cached(
         &self,
         query: PyRef<Self>,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         self.internal
             .symdel_cross_against_cached(&query.internal, max_distance, zero_index)
             .map_err(PyValueError::new_err)
@@ -53,9 +53,9 @@ impl CachedSymdel {
 #[pyfunction]
 fn symdel_within(
     query: Vec<String>,
-    max_distance: usize,
+    max_distance: u8,
     zero_index: bool,
-) -> PyResult<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
     check_strings_ascii(&query)?;
     let hit_candidates = get_candidates_within(&query, max_distance);
     Ok(get_true_hits(
@@ -71,9 +71,9 @@ fn symdel_within(
 fn symdel_cross(
     query: Vec<String>,
     reference: Vec<String>,
-    max_distance: usize,
+    max_distance: u8,
     zero_index: bool,
-) -> PyResult<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
     check_strings_ascii(&query)?;
     check_strings_ascii(&reference)?;
     let hit_candidates = get_candidates_cross(&query, &reference, max_distance);

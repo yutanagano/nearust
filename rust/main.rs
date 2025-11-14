@@ -30,7 +30,7 @@ use std::io::{self, BufReader, BufWriter};
 struct Args {
     /// The maximum (Levenshtein) edit distance away to check for neighbours.
     #[arg(short = 'd', long, default_value_t = 1)]
-    max_distance: usize,
+    max_distance: u8,
 
     /// The number of OS threads the program spawns (if 0 spawns one thread per CPU core).
     #[arg(short, long, default_value_t = 0)]

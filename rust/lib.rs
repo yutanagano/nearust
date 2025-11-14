@@ -24,11 +24,11 @@ enum CrossComparisonIndex {
 pub struct CachedSymdel {
     reference: Vec<String>,
     variant_map: HashMap<String, Vec<usize>>,
-    max_distance: usize,
+    max_distance: u8,
 }
 
 impl CachedSymdel {
-    pub fn new(reference: Vec<String>, max_distance: usize) -> Self {
+    pub fn new(reference: Vec<String>, max_distance: u8) -> Self {
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
         let (tx, rx) = mpsc::channel();
@@ -75,9 +75,9 @@ impl CachedSymdel {
 
     pub fn symdel_within(
         &self,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -132,9 +132,9 @@ impl CachedSymdel {
     pub fn symdel_cross(
         &self,
         query: &[String],
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -208,9 +208,9 @@ impl CachedSymdel {
     pub fn symdel_cross_against_cached(
         &self,
         query: &Self,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -288,7 +288,7 @@ impl CachedSymdel {
     }
 }
 
-pub fn get_candidates_within(query: &[String], max_distance: usize) -> Vec<(usize, usize)> {
+pub fn get_candidates_within(query: &[String], max_distance: u8) -> Vec<(usize, usize)> {
     let num_vi_pairs = get_num_vi_pairs(query, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -344,7 +344,7 @@ pub fn get_candidates_within(query: &[String], max_distance: usize) -> Vec<(usiz
 pub fn get_candidates_cross(
     query: &[String],
     reference: &[String],
-    max_distance: usize,
+    max_distance: u8,
 ) -> Vec<(usize, usize)> {
     let num_vi_query = get_num_vi_pairs(query, max_distance);
     let num_vi_reference = get_num_vi_pairs(reference, max_distance);
@@ -428,13 +428,13 @@ pub fn get_candidates_cross(
     hit_candidates
 }
 
-fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
+fn get_num_vi_pairs(strings: &[String], max_distance: u8) -> usize {
     strings
         .iter()
         .map(|s| {
             let mut num_vi_pairs = 0;
             for k in 0..=max_distance {
-                if k > s.len() {
+                if k as usize > s.len() {
                     break;
                 }
                 num_vi_pairs += get_num_k_combs(s.len(), k);
@@ -444,16 +444,16 @@ fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
         .sum()
 }
 
-fn get_num_k_combs(n: usize, k: usize) -> usize {
+fn get_num_k_combs(n: usize, k: u8) -> usize {
     assert!(n > 0);
-    assert!(n >= k);
+    assert!(n >= k as usize);
 
     if k == 0 {
         return 1;
     }
 
-    let num_subsamples: usize = (n - k + 1..=n).product();
-    let subsample_perms: usize = (1..=k).product();
+    let num_subsamples: usize = (n - k as usize + 1..=n).product();
+    let subsample_perms: usize = (1..=k as usize).product();
 
     return num_subsamples / subsample_perms;
 }
@@ -470,20 +470,20 @@ where
 
 /// Given an input string, generate all possible strings after making at most max_deletions
 /// single-character deletions.
-fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
+fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<String> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
     deletion_variants.push(input.to_string());
 
     for num_deletions in 1..=max_deletions {
-        if num_deletions > input_length {
+        if num_deletions as usize > input_length {
             deletion_variants.push("".to_string());
             break;
         }
 
-        for deletion_indices in (0..input_length).combinations(num_deletions) {
-            let mut variant = String::with_capacity(input_length - num_deletions);
+        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
+            let mut variant = String::with_capacity(input_length - num_deletions as usize);
             let mut offset = 0;
 
             for idx in deletion_indices.iter() {
@@ -507,10 +507,11 @@ fn get_true_hits(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
-    max_distance: usize,
+    max_distance: u8,
     zero_index: bool,
-) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
     let candidates_with_dist = compute_dists(hit_candidates, query, reference, max_distance);
+
     let mut q_indices = Vec::with_capacity(candidates_with_dist.len());
     let mut ref_indices = Vec::with_capacity(candidates_with_dist.len());
     let mut dists = Vec::with_capacity(candidates_with_dist.len());
@@ -562,7 +563,7 @@ pub fn write_true_results(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
-    max_distance: usize,
+    max_distance: u8,
     zero_index: bool,
     writer: &mut impl Write,
 ) {
@@ -584,21 +585,27 @@ fn compute_dists(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
-    max_distance: usize,
-) -> Vec<(usize, usize, usize)> {
+    max_distance: u8,
+) -> Vec<(usize, usize, u8)> {
     hit_candidates
         .into_par_iter()
         .map(|(idx_query, idx_reference)| {
             let string_query = &query[idx_query];
             let string_reference = &reference[idx_reference];
             let dist = if (string_query.len() > string_reference.len()
-                && string_query.len() - string_reference.len() == max_distance)
+                && string_query.len() - string_reference.len() == max_distance as usize)
                 || (string_query.len() < string_reference.len()
-                    && string_reference.len() - string_query.len() == max_distance)
+                    && string_reference.len() - string_query.len() == max_distance as usize)
             {
                 max_distance
             } else {
-                levenshtein::distance(string_query.chars(), string_reference.chars())
+                let full_dist =
+                    levenshtein::distance(string_query.chars(), string_reference.chars());
+                if full_dist > max_distance as usize {
+                    255
+                } else {
+                    full_dist as u8
+                }
             };
 
             (idx_query, idx_reference, dist)
@@ -757,7 +764,7 @@ mod tests {
         assert_eq!(test_output_stream, expected_output);
     }
 
-    fn written_to_coo(in_stream: impl BufRead) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    fn written_to_coo(in_stream: impl BufRead) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
         let mut q_indices = Vec::new();
         let mut ref_indices = Vec::new();
         let mut dists = Vec::new();
@@ -772,7 +779,7 @@ mod tests {
 
             q_indices.push(qi);
             ref_indices.push(ri);
-            dists.push(d);
+            dists.push(d as u8);
         }
 
         (q_indices, ref_indices, dists)
