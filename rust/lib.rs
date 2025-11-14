@@ -530,7 +530,7 @@ fn get_true_hits(
         } else {
             q_indices.push(qi + 1);
             ref_indices.push(ri + 1);
-            dists.push(d + 1);
+            dists.push(d);
         }
     }
 
@@ -761,66 +761,75 @@ mod tests {
         assert_eq!(test_output_stream, expected_output);
     }
 
-    // #[test]
-    // fn test_within_cached() {
-    //     let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-    //     let test_input = get_input_lines_as_ascii(f).unwrap();
-    //
-    //     let mut f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
-    //     let mut expected_output = Vec::new();
-    //     let _ = f.read_to_end(&mut expected_output);
-    //
-    //     let mut test_output_stream = Vec::new();
-    //
-    //     let cached = CachedSymdel::new(test_input, 1);
-    //     let results = cached.symdel_within(1, false).unwrap();
-    //     write_true_results(results, &mut test_output_stream);
-    //
-    //     assert_eq!(test_output_stream, expected_output);
-    // }
-    //
-    // #[test]
-    // fn test_cross_cached() {
-    //     let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-    //     let primary_input = get_input_lines_as_ascii(f).unwrap();
-    //
-    //     let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-    //     let comparison_input = get_input_lines_as_ascii(f).unwrap();
-    //
-    //     let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-    //     let mut expected_output = Vec::new();
-    //     let _ = f.read_to_end(&mut expected_output);
-    //
-    //     let mut test_output_stream = Vec::new();
-    //
-    //     let ccsd = CachedSymdel::new(comparison_input, 1);
-    //     let results = ccsd.symdel_cross(&primary_input, 1, false).unwrap();
-    //     write_true_results(results, &mut test_output_stream);
-    //
-    //     assert_eq!(test_output_stream, expected_output);
-    // }
-    //
-    // #[test]
-    // fn test_cross_cached_against_cached() {
-    //     let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-    //     let primary_input = get_input_lines_as_ascii(f).unwrap();
-    //
-    //     let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-    //     let comparison_input = get_input_lines_as_ascii(f).unwrap();
-    //
-    //     let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-    //     let mut expected_output = Vec::new();
-    //     let _ = f.read_to_end(&mut expected_output);
-    //
-    //     let mut test_output_stream = Vec::new();
-    //
-    //     let cached_query = CachedSymdel::new(primary_input, 1);
-    //     let cached_reference = CachedSymdel::new(comparison_input, 1);
-    //     let results = cached_reference
-    //         .symdel_cross_against_cached(&cached_query, 1, false)
-    //         .unwrap();
-    //     write_true_results(results, &mut test_output_stream);
-    //
-    //     assert_eq!(test_output_stream, expected_output);
-    // }
+    fn written_to_coo(in_stream: impl BufRead) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+        let mut q_indices = Vec::new();
+        let mut ref_indices = Vec::new();
+        let mut dists = Vec::new();
+
+        for line_res in in_stream.lines() {
+            let line = line_res.unwrap();
+            let mut parts = line.split(",");
+
+            let qi = parts.next().unwrap().parse::<usize>().unwrap();
+            let ri = parts.next().unwrap().parse::<usize>().unwrap();
+            let d = parts.next().unwrap().parse::<usize>().unwrap();
+
+            q_indices.push(qi);
+            ref_indices.push(ri);
+            dists.push(d);
+        }
+
+        (q_indices, ref_indices, dists)
+    }
+
+    #[test]
+    fn test_within_cached() {
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
+        let test_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
+        let expected_output = written_to_coo(f);
+
+        let cached = CachedSymdel::new(test_input, 1);
+        let results = cached.symdel_within(1, false).unwrap();
+
+        assert_eq!(results, expected_output);
+    }
+
+    #[test]
+    fn test_cross_cached() {
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
+        let primary_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
+        let comparison_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
+        let expected_output = written_to_coo(f);
+
+        let cached = CachedSymdel::new(comparison_input, 1);
+        let results = cached.symdel_cross(&primary_input, 1, false).unwrap();
+
+        assert_eq!(results, expected_output);
+    }
+
+    #[test]
+    fn test_cross_cached_against_cached() {
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
+        let primary_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
+        let comparison_input = get_input_lines_as_ascii(f).unwrap();
+
+        let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
+        let expected_output = written_to_coo(f);
+
+        let cached_query = CachedSymdel::new(primary_input, 1);
+        let cached_reference = CachedSymdel::new(comparison_input, 1);
+        let results = cached_reference
+            .symdel_cross_against_cached(&cached_query, 1, false)
+            .unwrap();
+
+        assert_eq!(results, expected_output);
+    }
 }
