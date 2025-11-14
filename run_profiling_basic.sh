@@ -16,9 +16,10 @@ if [ ! -d "profiling/results" ]; then
 fi
 
 mean=0
-std=0
-function compute_mean_std {
+sem=0
+function compute_mean_sem {
   local vals=("$@")
+  local len_vals=${#vals[@]}
 
   local sum=0
   for val in "${vals[@]}"; do
@@ -30,7 +31,8 @@ function compute_mean_std {
   for val in "${vals[@]}"; do
     sum=$(echo "$sum + ($val - $mean) * ($val - $mean)" | bc -l)
   done
-  std=$(echo "sqrt($sum / ${#vals[@]})" | bc -l)
+  local std=$(echo "sqrt($sum / ($len_vals - 1))" | bc -l)
+  sem=$(echo "$std / sqrt($len_vals)" | bc -l)
 }
 
 function basic_benchmarking {
@@ -49,16 +51,20 @@ function basic_benchmarking {
     mem_kb_array+=($mem_kb)
   done
 
-  compute_mean_std "${time_s_array[@]}"
+  compute_mean_sem "${time_s_array[@]}"
   local mean_time_s=$mean
-  local std_time_s=$std
+  local sem_time_s=$sem
 
-  compute_mean_std "${mem_kb_array[@]}"
+  compute_mean_sem "${mem_kb_array[@]}"
   local mean_mem_kb=$mean
-  local std_mem_kb=$std
+  local sem_mem_kb=$sem
 
-  echo "runtime (s):            $(printf "%.3f" $mean_time_s) ($(printf "%.3f" $std_time_s))"
-  echo "max resident size (kb): $(printf "%.0f" $mean_mem_kb) ($(printf "%.0f" $std_mem_kb))"
+  echo "runtime (s):"
+  echo "  mean: $(printf "%.3f" $mean_time_s)"
+  echo "  sem:  $(printf "%.3f" $sem_time_s)"
+  echo "max resident size (kb):"
+  echo "  mean: $(printf "%.0f" $mean_mem_kb)"
+  echo "  sem:  $(printf "%.0f" $sem_mem_kb)"
 }
 
 echo "Profiling within-set symdel..."
