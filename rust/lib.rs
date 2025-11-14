@@ -77,7 +77,7 @@ impl CachedSymdel {
         &self,
         max_distance: usize,
         zero_index: bool,
-    ) -> io::Result<Vec<(usize, usize, usize)>> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -134,7 +134,7 @@ impl CachedSymdel {
         query: &[String],
         max_distance: usize,
         zero_index: bool,
-    ) -> io::Result<Vec<(usize, usize, usize)>> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -210,7 +210,7 @@ impl CachedSymdel {
         query: &Self,
         max_distance: usize,
         zero_index: bool,
-    ) -> io::Result<Vec<(usize, usize, usize)>> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -513,19 +513,28 @@ fn get_true_hits(
     reference: &[String],
     max_distance: usize,
     zero_index: bool,
-) -> Vec<(usize, usize, usize)> {
+) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let candidates_with_dist = compute_dists(hit_candidates, query, reference, max_distance);
-    candidates_with_dist
-        .into_iter()
-        .filter(|(_, _, dist)| *dist <= max_distance)
-        .map(|(qidx, refidx, dist)| {
-            if zero_index {
-                (qidx, refidx, dist)
-            } else {
-                (qidx + 1, refidx + 1, dist)
-            }
-        })
-        .collect_vec()
+    let mut q_indices = Vec::with_capacity(candidates_with_dist.len());
+    let mut ref_indices = Vec::with_capacity(candidates_with_dist.len());
+    let mut dists = Vec::with_capacity(candidates_with_dist.len());
+
+    for (qi, ri, d) in candidates_with_dist.into_iter() {
+        if d > max_distance {
+            continue;
+        }
+        if zero_index {
+            q_indices.push(qi);
+            ref_indices.push(ri);
+            dists.push(d);
+        } else {
+            q_indices.push(qi + 1);
+            ref_indices.push(ri + 1);
+            dists.push(d + 1);
+        }
+    }
+
+    (q_indices, ref_indices, dists)
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
