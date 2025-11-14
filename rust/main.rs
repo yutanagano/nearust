@@ -1,4 +1,6 @@
-use _lib::{get_input_lines_as_ascii, symdel_cross, symdel_within, write_results};
+use _lib::{
+    get_candidates_cross, get_candidates_within, get_input_lines_as_ascii, write_true_results,
+};
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
@@ -74,22 +76,37 @@ fn main() {
         }
     };
 
-    let results = match args.file_reference {
+    match args.file_reference {
         Some(path) => {
             let comparison_reader = get_file_bufreader(&path);
             let comparison_input = get_input_lines_as_ascii(comparison_reader)
                 .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
 
-            symdel_cross(
+            let hit_candidates =
+                get_candidates_cross(&primary_input, &comparison_input, args.max_distance);
+
+            write_true_results(
+                hit_candidates,
                 &primary_input,
                 &comparison_input,
                 args.max_distance,
                 args.zero_index,
-            )
+                &mut stdout,
+            );
         }
-        None => symdel_within(&primary_input, args.max_distance, args.zero_index),
+        None => {
+            let hit_candidates = get_candidates_within(&primary_input, args.max_distance);
+
+            write_true_results(
+                hit_candidates,
+                &primary_input,
+                &primary_input,
+                args.max_distance,
+                args.zero_index,
+                &mut stdout,
+            );
+        }
     };
-    write_results(results, &mut stdout);
 }
 
 /// Get a buffered reader to a file at path.
