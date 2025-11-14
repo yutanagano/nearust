@@ -15,27 +15,50 @@ if [ ! -d "profiling/results" ]; then
   mkdir "profiling/results"
 fi
 
+mean=0
+std=0
+function compute_mean_std {
+  local vals=("$@")
+
+  local sum=0
+  for val in "${vals[@]}"; do
+    sum=$(echo "$sum + $val" | bc -l)
+  done
+  mean=$(echo "$sum / ${#vals[@]}" | bc -l)
+
+  local sum=0
+  for val in "${vals[@]}"; do
+    sum=$(echo "$sum + ($val - $mean) * ($val - $mean)" | bc -l)
+  done
+  std=$(echo "sqrt($sum / ${#vals[@]})" | bc -l)
+}
+
 function basic_benchmarking {
-  local total_time_s=0
-  local total_mem_kb=0
+  local time_s_array=()
+  local mem_kb_array=()
 
   for i in $(seq 1 $REPEATS); do
     local output=$(/usr/bin/time -v $1 2>&1 >/dev/null)
 
     local time_str=$(echo "$output" | grep "Elapsed (wall clock) time" | awk -F': ' '{print $2}')
     IFS=: read -r -a parts <<< "$time_str"
-    time_s=$(echo "${parts[0]} * 60 + ${parts[1]}" | bc)
-    total_time_s=$(echo "$total_time_s + $time_s" | bc)
+    time_s=$(echo "${parts[0]} * 60 + ${parts[1]}" | bc -l)
+    time_s_array+=($time_s)
 
     local mem_kb=$(echo "$output" | grep "Maximum resident set size" | awk -F': ' '{print $2}')
-    total_mem_kb=$(echo "$total_mem_kb + $mem_kb" | bc)
+    mem_kb_array+=($mem_kb)
   done
 
-  local avg_time_s=$(echo "scale=2; $total_time_s / $REPEATS" | bc)
-  local avg_mem_kb=$(echo "scale=2; $total_mem_kb / $REPEATS" | bc)
+  compute_mean_std "${time_s_array[@]}"
+  local mean_time_s=$mean
+  local std_time_s=$std
 
-  echo "avg runtime (s):            $avg_time_s"
-  echo "avg max resident size (kb): $avg_mem_kb"
+  compute_mean_std "${mem_kb_array[@]}"
+  local mean_mem_kb=$mean
+  local std_mem_kb=$std
+
+  echo "runtime (s):            $(printf "%.3f" $mean_time_s) ($(printf "%.3f" $std_time_s))"
+  echo "max resident size (kb): $(printf "%.0f" $mean_mem_kb) ($(printf "%.0f" $std_mem_kb))"
 }
 
 echo "Profiling within-set symdel..."
