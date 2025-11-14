@@ -5,6 +5,7 @@ use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter};
+use std::process;
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
@@ -61,29 +62,43 @@ fn main() {
     ThreadPoolBuilder::new()
         .num_threads(args.num_threads)
         .build_global()
-        .unwrap_or_else(|_| panic!("global thread pool cannot be initialised more than once"));
+        .unwrap_or_else(|_| {
+            eprintln!("global thread pool cannot be initialised more than once");
+            process::exit(1);
+        });
 
     let primary_input = match args.file_query {
         Some(path) => {
             let reader = get_file_bufreader(&path);
-            get_input_lines_as_ascii(reader)
-                .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()))
+            get_input_lines_as_ascii(reader).unwrap_or_else(|e| {
+                eprintln!("(from {}) {}", &path, e);
+                process::exit(1);
+            })
         }
         None => {
             let stdin = io::stdin().lock();
-            get_input_lines_as_ascii(stdin)
-                .unwrap_or_else(|e| panic!("(from stdin) {}", e.to_string()))
+            get_input_lines_as_ascii(stdin).unwrap_or_else(|e| {
+                eprintln!("(from stdin) {}", e);
+                process::exit(1);
+            })
         }
     };
 
     match args.file_reference {
         Some(path) => {
             let comparison_reader = get_file_bufreader(&path);
-            let comparison_input = get_input_lines_as_ascii(comparison_reader)
-                .unwrap_or_else(|e| panic!("(from {}) {}", &path, e.to_string()));
+            let comparison_input =
+                get_input_lines_as_ascii(comparison_reader).unwrap_or_else(|e| {
+                    eprintln!("(from {}) {}", &path, e);
+                    process::exit(1);
+                });
 
             let hit_candidates =
-                get_candidates_cross(&primary_input, &comparison_input, args.max_distance);
+                get_candidates_cross(&primary_input, &comparison_input, args.max_distance)
+                    .unwrap_or_else(|e| {
+                        eprintln!("{}", e);
+                        process::exit(1)
+                    });
 
             write_true_results(
                 hit_candidates,
@@ -95,7 +110,11 @@ fn main() {
             );
         }
         None => {
-            let hit_candidates = get_candidates_within(&primary_input, args.max_distance);
+            let hit_candidates = get_candidates_within(&primary_input, args.max_distance)
+                .unwrap_or_else(|e| {
+                    eprintln!("{}", e);
+                    process::exit(1);
+                });
 
             write_true_results(
                 hit_candidates,
@@ -111,7 +130,9 @@ fn main() {
 
 /// Get a buffered reader to a file at path.
 fn get_file_bufreader(path: &str) -> BufReader<File> {
-    let file =
-        File::open(&path).unwrap_or_else(|e| panic!("failed to open {}: {}", &path, e.to_string()));
+    let file = File::open(&path).unwrap_or_else(|e| {
+        eprintln!("failed to open {}: {}", &path, e);
+        process::exit(1)
+    });
     BufReader::new(file)
 }

@@ -12,7 +12,8 @@ impl CachedSymdel {
     #[new]
     fn new(reference: Vec<String>, max_distance: u8) -> PyResult<Self> {
         check_strings_ascii(&reference)?;
-        let internal = super::CachedSymdel::new(reference, max_distance);
+        let internal =
+            super::CachedSymdel::new(reference, max_distance).map_err(PyValueError::new_err)?;
         Ok(CachedSymdel { internal })
     }
 
@@ -57,7 +58,8 @@ fn symdel_within(
     zero_index: bool,
 ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
     check_strings_ascii(&query)?;
-    let hit_candidates = get_candidates_within(&query, max_distance);
+    let hit_candidates =
+        get_candidates_within(&query, max_distance).map_err(PyValueError::new_err)?;
     Ok(get_true_hits(
         hit_candidates,
         &query,
@@ -76,7 +78,8 @@ fn symdel_cross(
 ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
     check_strings_ascii(&query)?;
     check_strings_ascii(&reference)?;
-    let hit_candidates = get_candidates_cross(&query, &reference, max_distance);
+    let hit_candidates =
+        get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
     Ok(get_true_hits(
         hit_candidates,
         &query,

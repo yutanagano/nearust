@@ -4,10 +4,10 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::io;
 use std::io::{BufRead, Error, ErrorKind::InvalidData, Write};
 use std::usize;
 use std::{hash::Hash, sync::mpsc};
+use std::{io, u8};
 
 mod pymod;
 
@@ -28,7 +28,18 @@ pub struct CachedSymdel {
 }
 
 impl CachedSymdel {
-    pub fn new(reference: Vec<String>, max_distance: u8) -> Self {
+    pub fn new(reference: Vec<String>, max_distance: u8) -> io::Result<Self> {
+        if max_distance == u8::MAX {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "max_distance must be less than {} (got {})",
+                    u8::MAX,
+                    max_distance
+                ),
+            ));
+        }
+
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
         let (tx, rx) = mpsc::channel();
@@ -66,11 +77,11 @@ impl CachedSymdel {
             }
         }
 
-        CachedSymdel {
+        Ok(CachedSymdel {
             reference,
             variant_map,
             max_distance,
-        }
+        })
     }
 
     pub fn symdel_within(
@@ -288,7 +299,21 @@ impl CachedSymdel {
     }
 }
 
-pub fn get_candidates_within(query: &[String], max_distance: u8) -> Vec<(usize, usize)> {
+pub fn get_candidates_within(
+    query: &[String],
+    max_distance: u8,
+) -> io::Result<Vec<(usize, usize)>> {
+    if max_distance == u8::MAX {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "max_distance must be less than {} (got {})",
+                u8::MAX,
+                max_distance
+            ),
+        ));
+    }
+
     let num_vi_pairs = get_num_vi_pairs(query, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
@@ -338,14 +363,25 @@ pub fn get_candidates_within(query: &[String], max_distance: u8) -> Vec<(usize, 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    hit_candidates
+    Ok(hit_candidates)
 }
 
 pub fn get_candidates_cross(
     query: &[String],
     reference: &[String],
     max_distance: u8,
-) -> Vec<(usize, usize)> {
+) -> io::Result<Vec<(usize, usize)>> {
+    if max_distance == u8::MAX {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "max_distance must be less than {} (got {})",
+                u8::MAX,
+                max_distance
+            ),
+        ));
+    }
+
     let num_vi_query = get_num_vi_pairs(query, max_distance);
     let num_vi_reference = get_num_vi_pairs(reference, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_query + num_vi_reference);
@@ -425,7 +461,7 @@ pub fn get_candidates_cross(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    hit_candidates
+    Ok(hit_candidates)
 }
 
 fn get_num_vi_pairs(strings: &[String], max_distance: u8) -> usize {
@@ -602,7 +638,7 @@ fn compute_dists(
                 let full_dist =
                     levenshtein::distance(string_query.chars(), string_reference.chars());
                 if full_dist > max_distance as usize {
-                    255
+                    u8::MAX
                 } else {
                     full_dist as u8
                 }
@@ -689,7 +725,7 @@ mod tests {
         f.read_to_end(&mut expected_output).unwrap();
 
         let mut test_output_stream = Vec::new();
-        let results = get_candidates_within(&test_input, 1);
+        let results = get_candidates_within(&test_input, 1).unwrap();
         write_true_results(
             results,
             &test_input,
@@ -707,7 +743,7 @@ mod tests {
         let mut f = BufReader::new(File::open("test_files/results_10k_a_d2.txt").unwrap());
         f.read_to_end(&mut expected_output).unwrap();
 
-        let results = get_candidates_within(&test_input, 2);
+        let results = get_candidates_within(&test_input, 2).unwrap();
         write_true_results(
             results,
             &test_input,
@@ -733,7 +769,7 @@ mod tests {
         f.read_to_end(&mut expected_output).unwrap();
 
         let mut test_output_stream = Vec::new();
-        let results = get_candidates_cross(&primary_input, &comparison_input, 1);
+        let results = get_candidates_cross(&primary_input, &comparison_input, 1).unwrap();
         write_true_results(
             results,
             &primary_input,
@@ -751,7 +787,7 @@ mod tests {
         let mut f = BufReader::new(File::open("test_files/results_10k_cross_d2.txt").unwrap());
         f.read_to_end(&mut expected_output).unwrap();
 
-        let results = get_candidates_cross(&primary_input, &comparison_input, 2);
+        let results = get_candidates_cross(&primary_input, &comparison_input, 2).unwrap();
         write_true_results(
             results,
             &primary_input,
@@ -793,7 +829,7 @@ mod tests {
         let f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
         let expected_output = written_to_coo(f);
 
-        let cached = CachedSymdel::new(test_input, 1);
+        let cached = CachedSymdel::new(test_input, 1).unwrap();
         let results = cached.symdel_within(1, false).unwrap();
 
         assert_eq!(results, expected_output);
@@ -810,7 +846,7 @@ mod tests {
         let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
         let expected_output = written_to_coo(f);
 
-        let cached = CachedSymdel::new(comparison_input, 1);
+        let cached = CachedSymdel::new(comparison_input, 1).unwrap();
         let results = cached.symdel_cross(&primary_input, 1, false).unwrap();
 
         assert_eq!(results, expected_output);
@@ -827,8 +863,8 @@ mod tests {
         let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
         let expected_output = written_to_coo(f);
 
-        let cached_query = CachedSymdel::new(primary_input, 1);
-        let cached_reference = CachedSymdel::new(comparison_input, 1);
+        let cached_query = CachedSymdel::new(primary_input, 1).unwrap();
+        let cached_reference = CachedSymdel::new(comparison_input, 1).unwrap();
         let results = cached_reference
             .symdel_cross_against_cached(&cached_query, 1, false)
             .unwrap();
