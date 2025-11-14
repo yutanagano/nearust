@@ -4,6 +4,10 @@ echo "NOTE: make sure you are running this shell script from outside the Python 
 echo "Building CLI binary..."
 RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
 
+echo "Building Python package..."
+source ./.venv/bin/activate
+pip install .[dev]
+
 CURRENT_COMMIT=$(python ./profiling/scripts/get_version.py)
 REPEATS=5
 
