@@ -15,27 +15,56 @@ if [ ! -d "profiling/results" ]; then
   mkdir "profiling/results"
 fi
 
+mean=0
+sem=0
+function compute_mean_sem {
+  local vals=("$@")
+  local len_vals=${#vals[@]}
+
+  local sum=0
+  for val in "${vals[@]}"; do
+    sum=$(echo "$sum + $val" | bc -l)
+  done
+  mean=$(echo "$sum / ${#vals[@]}" | bc -l)
+
+  local sum=0
+  for val in "${vals[@]}"; do
+    sum=$(echo "$sum + ($val - $mean) * ($val - $mean)" | bc -l)
+  done
+  local std=$(echo "sqrt($sum / ($len_vals - 1))" | bc -l)
+  sem=$(echo "$std / sqrt($len_vals)" | bc -l)
+}
+
 function basic_benchmarking {
-  local total_time_s=0
-  local total_mem_kb=0
+  local time_s_array=()
+  local mem_kb_array=()
 
   for i in $(seq 1 $REPEATS); do
     local output=$(/usr/bin/time -v $1 2>&1 >/dev/null)
 
     local time_str=$(echo "$output" | grep "Elapsed (wall clock) time" | awk -F': ' '{print $2}')
     IFS=: read -r -a parts <<< "$time_str"
-    time_s=$(echo "${parts[0]} * 60 + ${parts[1]}" | bc)
-    total_time_s=$(echo "$total_time_s + $time_s" | bc)
+    time_s=$(echo "${parts[0]} * 60 + ${parts[1]}" | bc -l)
+    time_s_array+=($time_s)
 
     local mem_kb=$(echo "$output" | grep "Maximum resident set size" | awk -F': ' '{print $2}')
-    total_mem_kb=$(echo "$total_mem_kb + $mem_kb" | bc)
+    mem_kb_array+=($mem_kb)
   done
 
-  local avg_time_s=$(echo "scale=2; $total_time_s / $REPEATS" | bc)
-  local avg_mem_kb=$(echo "scale=2; $total_mem_kb / $REPEATS" | bc)
+  compute_mean_sem "${time_s_array[@]}"
+  local mean_time_s=$mean
+  local sem_time_s=$sem
 
-  echo "avg runtime (s):            $avg_time_s"
-  echo "avg max resident size (kb): $avg_mem_kb"
+  compute_mean_sem "${mem_kb_array[@]}"
+  local mean_mem_kb=$mean
+  local sem_mem_kb=$sem
+
+  echo "runtime (s):"
+  echo "  mean: $(printf "%.3f" $mean_time_s)"
+  echo "  sem:  $(printf "%.3f" $sem_time_s)"
+  echo "max resident size (kb):"
+  echo "  mean: $(printf "%.0f" $mean_mem_kb)"
+  echo "  sem:  $(printf "%.0f" $sem_mem_kb)"
 }
 
 echo "Profiling within-set symdel..."
