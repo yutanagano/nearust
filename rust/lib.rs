@@ -298,7 +298,6 @@ pub fn symdel_within(
     let (tx, rx) = mpsc::channel();
     query
         .par_iter()
-        .with_min_len(1000)
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -329,7 +328,6 @@ pub fn symdel_within(
     let (tx, rx) = mpsc::channel();
     convergent_indices
         .par_iter()
-        .with_min_len(1000)
         .for_each_with(tx, |tx, indices| {
             let pair_tuples = indices
                 .iter()
