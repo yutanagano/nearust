@@ -323,13 +323,9 @@ pub fn get_candidates_within(query: &[String], max_distance: usize) -> Vec<(usiz
     let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
     let (tx, rx) = mpsc::channel();
     convergent_indices
-        .par_iter()
+        .into_par_iter()
         .for_each_with(tx, |tx, indices| {
-            let pair_tuples = indices
-                .iter()
-                .combinations(2)
-                .map(|v| (*v[0], *v[1]))
-                .collect_vec();
+            let pair_tuples = indices.into_iter().tuple_combinations().collect_vec();
             tx.send(pair_tuples).unwrap();
         });
 
@@ -409,16 +405,16 @@ pub fn get_candidates_cross(
 
     let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
     let (tx, rx) = mpsc::channel();
-    convergent_indices
-        .par_iter()
-        .for_each_with(tx, |tx, (indices_query, indices_reference)| {
+    convergent_indices.into_par_iter().for_each_with(
+        tx,
+        |tx, (indices_query, indices_reference)| {
             let pair_tuples = indices_query
                 .into_iter()
                 .cartesian_product(indices_reference)
-                .map(|v| (*v.0, *v.1))
                 .collect_vec();
             tx.send(pair_tuples).unwrap();
-        });
+        },
+    );
 
     for pair_tuples in rx {
         for pair in pair_tuples {
