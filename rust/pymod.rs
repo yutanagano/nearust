@@ -1,5 +1,6 @@
 use super::{get_candidates_cross, get_candidates_within, get_true_hits};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use numpy::IntoPyArray;
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
 use std::usize;
 
 #[pyclass]
@@ -17,76 +18,121 @@ impl CachedSymdel {
         Ok(CachedSymdel { internal })
     }
 
-    fn symdel_within(
+    fn symdel_within<'py>(
         &self,
+        py: Python<'py>,
         max_distance: u8,
         zero_index: bool,
-    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
-        self.internal
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let (q_indices, ref_indices, dists) = self
+            .internal
             .symdel_within(max_distance, zero_index)
-            .map_err(PyValueError::new_err)
+            .map_err(PyValueError::new_err)?;
+
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
     }
 
-    fn symdel_cross(
+    fn symdel_cross<'py>(
         &self,
+        py: Python<'py>,
         query: Vec<String>,
         max_distance: u8,
         zero_index: bool,
-    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
+    ) -> PyResult<Bound<'py, PyTuple>> {
         check_strings_ascii(&query)?;
-        self.internal
+        let (q_indices, ref_indices, dists) = self
+            .internal
             .symdel_cross(&query, max_distance, zero_index)
-            .map_err(PyValueError::new_err)
+            .map_err(PyValueError::new_err)?;
+
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
     }
 
-    fn symdel_cross_against_cached(
+    fn symdel_cross_against_cached<'py>(
         &self,
+        py: Python<'py>,
         query: PyRef<Self>,
         max_distance: u8,
         zero_index: bool,
-    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
-        self.internal
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let (q_indices, ref_indices, dists) = self
+            .internal
             .symdel_cross_against_cached(&query.internal, max_distance, zero_index)
-            .map_err(PyValueError::new_err)
+            .map_err(PyValueError::new_err)?;
+
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
     }
 }
 
 #[pyfunction]
-fn symdel_within(
+fn symdel_within<'py>(
+    py: Python<'py>,
     query: Vec<String>,
     max_distance: u8,
     zero_index: bool,
-) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
+) -> PyResult<Bound<'py, PyTuple>> {
     check_strings_ascii(&query)?;
+
     let hit_candidates =
         get_candidates_within(&query, max_distance).map_err(PyValueError::new_err)?;
-    Ok(get_true_hits(
-        hit_candidates,
-        &query,
-        &query,
-        max_distance,
-        zero_index,
-    ))
+    let (q_indices, ref_indices, dists) =
+        get_true_hits(hit_candidates, &query, &query, max_distance, zero_index);
+
+    PyTuple::new(
+        py,
+        &[
+            q_indices.into_pyarray(py).as_any(),
+            ref_indices.into_pyarray(py).as_any(),
+            dists.into_pyarray(py).as_any(),
+        ],
+    )
 }
 
 #[pyfunction]
-fn symdel_cross(
+fn symdel_cross<'py>(
+    py: Python<'py>,
     query: Vec<String>,
     reference: Vec<String>,
     max_distance: u8,
     zero_index: bool,
-) -> PyResult<(Vec<usize>, Vec<usize>, Vec<u8>)> {
+) -> PyResult<Bound<'py, PyTuple>> {
     check_strings_ascii(&query)?;
     check_strings_ascii(&reference)?;
+
     let hit_candidates =
         get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
-    Ok(get_true_hits(
-        hit_candidates,
-        &query,
-        &reference,
-        max_distance,
-        zero_index,
-    ))
+    let (q_indices, ref_indices, dists) =
+        get_true_hits(hit_candidates, &query, &reference, max_distance, zero_index);
+
+    PyTuple::new(
+        py,
+        &[
+            q_indices.into_pyarray(py).as_any(),
+            ref_indices.into_pyarray(py).as_any(),
+            dists.into_pyarray(py).as_any(),
+        ],
+    )
 }
 
 fn check_strings_ascii(strings: &[String]) -> Result<(), PyErr> {
