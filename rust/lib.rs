@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use std::io::{BufRead, Error, ErrorKind::InvalidData, Write};
 use std::usize;
 use std::{hash::Hash, sync::mpsc};
-use std::{io, u8};
+use std::{io, mem, u8};
 
 mod pymod;
 
@@ -60,8 +60,8 @@ impl CachedSymdel {
                 transmitter.send((idx, variants_and_hashes)).unwrap();
             });
 
-        for (idx, mut variants_and_hashes) in rx {
-            for (variant, precomputed_hash) in variants_and_hashes.drain(..) {
+        for (idx, variants_and_hashes) in rx {
+            for (variant, precomputed_hash) in variants_and_hashes.into_iter() {
                 match variant_map
                     .raw_entry_mut()
                     .from_key_hashed_nocheck(precomputed_hash, &variant)
@@ -130,6 +130,8 @@ impl CachedSymdel {
             }
         }
 
+        mem::drop(convergent_indices);
+
         hit_candidates.par_sort_unstable();
         hit_candidates.dedup();
 
@@ -180,14 +182,15 @@ impl CachedSymdel {
                 let variant = &group[0].0;
                 match self.variant_map.get(variant) {
                     None => return,
-                    Some(indices_ref_borrowed) => {
+                    Some(indices_ref) => {
                         let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                        let indices_ref = indices_ref_borrowed.iter().map(|&v| v).collect_vec();
                         total_num_index_pairs += indices_query.len() * indices_ref.len();
                         convergent_indices.push((indices_query, indices_ref));
                     }
                 }
             });
+
+        mem::drop(variant_index_pairs);
 
         let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
         let (tx, rx) = mpsc::channel();
@@ -197,7 +200,7 @@ impl CachedSymdel {
             .for_each_with(tx, |tx, (indices_query, indices_ref)| {
                 let pair_tuples = indices_query
                     .into_iter()
-                    .cartesian_product(indices_ref)
+                    .cartesian_product(indices_ref.iter().map(|&v| v))
                     .collect_vec();
                 tx.send(pair_tuples).unwrap();
             });
@@ -240,13 +243,10 @@ impl CachedSymdel {
         if query.variant_map.len() < self.variant_map.len() {
             query.variant_map.par_iter().for_each_with(
                 tx,
-                |transmitter, (variant, indices_query_borrowed)| match self.variant_map.get(variant)
-                {
+                |transmitter, (variant, indices_query)| match self.variant_map.get(variant) {
                     None => return,
-                    Some(indices_ref_borrowed) => {
-                        let indices_query = indices_query_borrowed.iter().map(|&v| v).collect_vec();
-                        let indices_ref = indices_ref_borrowed.iter().map(|&v| v).collect_vec();
-                        let num_index_pairs = indices_query_borrowed.len() * indices_ref.len();
+                    Some(indices_ref) => {
+                        let num_index_pairs = indices_query.len() * indices_ref.len();
                         transmitter
                             .send((num_index_pairs, (indices_query, indices_ref)))
                             .unwrap();
@@ -254,21 +254,19 @@ impl CachedSymdel {
                 },
             );
         } else {
-            self.variant_map.par_iter().for_each_with(
-                tx,
-                |transmitter, (variant, indices_ref_borrowed)| match query.variant_map.get(variant)
-                {
-                    None => return,
-                    Some(indices_query_borrowed) => {
-                        let indices_query = indices_query_borrowed.iter().map(|&v| v).collect_vec();
-                        let indices_ref = indices_ref_borrowed.iter().map(|&v| v).collect_vec();
-                        let num_index_pairs = indices_query.len() * indices_ref_borrowed.len();
-                        transmitter
-                            .send((num_index_pairs, (indices_query, indices_ref)))
-                            .unwrap();
+            self.variant_map
+                .par_iter()
+                .for_each_with(tx, |transmitter, (variant, indices_ref)| {
+                    match query.variant_map.get(variant) {
+                        None => return,
+                        Some(indices_query) => {
+                            let num_index_pairs = indices_query.len() * indices_ref.len();
+                            transmitter
+                                .send((num_index_pairs, (indices_query, indices_ref)))
+                                .unwrap();
+                        }
                     }
-                },
-            );
+                });
         }
 
         for (num_index_pairs, indices) in rx {
@@ -283,8 +281,9 @@ impl CachedSymdel {
             .with_min_len(100000)
             .for_each_with(tx, |tx, (indices_query, indices_ref)| {
                 let pair_tuples = indices_query
-                    .into_iter()
-                    .cartesian_product(indices_ref)
+                    .iter()
+                    .map(|&v| v)
+                    .cartesian_product(indices_ref.iter().map(|&v| v))
                     .collect_vec();
                 tx.send(pair_tuples).unwrap();
             });
@@ -353,6 +352,8 @@ pub fn get_candidates_within(
             let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
             convergent_indices.push(indices);
         });
+
+    mem::drop(variant_index_pairs);
 
     let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
     let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
@@ -424,7 +425,7 @@ pub fn get_candidates_cross(
         }
     }
 
-    variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    variant_index_pairs.par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
 
     let mut convergent_indices = Vec::new();
     let mut total_num_index_pairs = 0;
@@ -438,9 +439,9 @@ pub fn get_candidates_cross(
             let mut indices_query = Vec::new();
             let mut indices_reference = Vec::new();
 
-            group.iter().for_each(|(_, idx)| match idx {
-                CrossComparisonIndex::Query(v) => indices_query.push(*v),
-                CrossComparisonIndex::Reference(v) => indices_reference.push(*v),
+            group.iter().for_each(|&(_, idx)| match idx {
+                CrossComparisonIndex::Query(v) => indices_query.push(v),
+                CrossComparisonIndex::Reference(v) => indices_reference.push(v),
             });
 
             let num_index_pairs = indices_query.len() * indices_reference.len();
@@ -451,6 +452,8 @@ pub fn get_candidates_cross(
             total_num_index_pairs += num_index_pairs;
             convergent_indices.push((indices_query, indices_reference));
         });
+
+    mem::drop(variant_index_pairs);
 
     let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
     let (tx, rx) = mpsc::channel();
