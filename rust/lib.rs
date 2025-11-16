@@ -46,6 +46,7 @@ impl CachedSymdel {
 
         reference
             .par_iter()
+            .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
                 let variants_and_hashes = get_deletion_variants(s, max_distance)
@@ -113,11 +114,12 @@ impl CachedSymdel {
         let (tx, rx) = mpsc::channel();
         convergent_indices
             .par_iter()
+            .with_min_len(100000)
             .for_each_with(tx, |transmitter, indices| {
                 let pair_tuples = indices
                     .iter()
-                    .combinations(2)
-                    .map(|v| (*v[0], *v[1]))
+                    .map(|&v| v)
+                    .tuple_combinations()
                     .collect_vec();
                 transmitter.send(pair_tuples).unwrap();
             });
@@ -155,6 +157,7 @@ impl CachedSymdel {
         let (tx, rx) = mpsc::channel();
         query
             .par_iter()
+            .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
                 let variants = get_deletion_variants(s, max_distance);
@@ -177,8 +180,9 @@ impl CachedSymdel {
                 let variant = &group[0].0;
                 match self.variant_map.get(variant) {
                     None => return,
-                    Some(indices_ref) => {
-                        let indices_query = group.iter().map(|(_, idx)| *idx).collect_vec();
+                    Some(indices_ref_borrowed) => {
+                        let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
+                        let indices_ref = indices_ref_borrowed.iter().map(|&v| v).collect_vec();
                         total_num_index_pairs += indices_query.len() * indices_ref.len();
                         convergent_indices.push((indices_query, indices_ref));
                     }
@@ -188,12 +192,12 @@ impl CachedSymdel {
         let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
         let (tx, rx) = mpsc::channel();
         convergent_indices
-            .par_iter()
+            .into_par_iter()
+            .with_min_len(100000)
             .for_each_with(tx, |tx, (indices_query, indices_ref)| {
                 let pair_tuples = indices_query
                     .into_iter()
-                    .cartesian_product(*indices_ref)
-                    .map(|v| (*v.0, *v.1))
+                    .cartesian_product(indices_ref)
                     .collect_vec();
                 tx.send(pair_tuples).unwrap();
             });
@@ -236,10 +240,13 @@ impl CachedSymdel {
         if query.variant_map.len() < self.variant_map.len() {
             query.variant_map.par_iter().for_each_with(
                 tx,
-                |transmitter, (variant, indices_query)| match self.variant_map.get(variant) {
+                |transmitter, (variant, indices_query_borrowed)| match self.variant_map.get(variant)
+                {
                     None => return,
-                    Some(indices_ref) => {
-                        let num_index_pairs = indices_query.len() * indices_ref.len();
+                    Some(indices_ref_borrowed) => {
+                        let indices_query = indices_query_borrowed.iter().map(|&v| v).collect_vec();
+                        let indices_ref = indices_ref_borrowed.iter().map(|&v| v).collect_vec();
+                        let num_index_pairs = indices_query_borrowed.len() * indices_ref.len();
                         transmitter
                             .send((num_index_pairs, (indices_query, indices_ref)))
                             .unwrap();
@@ -247,19 +254,21 @@ impl CachedSymdel {
                 },
             );
         } else {
-            self.variant_map
-                .par_iter()
-                .for_each_with(tx, |transmitter, (variant, indices_ref)| {
-                    match query.variant_map.get(variant) {
-                        None => return,
-                        Some(indices_query) => {
-                            let num_index_pairs = indices_query.len() * indices_ref.len();
-                            transmitter
-                                .send((num_index_pairs, (indices_query, indices_ref)))
-                                .unwrap();
-                        }
+            self.variant_map.par_iter().for_each_with(
+                tx,
+                |transmitter, (variant, indices_ref_borrowed)| match query.variant_map.get(variant)
+                {
+                    None => return,
+                    Some(indices_query_borrowed) => {
+                        let indices_query = indices_query_borrowed.iter().map(|&v| v).collect_vec();
+                        let indices_ref = indices_ref_borrowed.iter().map(|&v| v).collect_vec();
+                        let num_index_pairs = indices_query.len() * indices_ref_borrowed.len();
+                        transmitter
+                            .send((num_index_pairs, (indices_query, indices_ref)))
+                            .unwrap();
                     }
-                });
+                },
+            );
         }
 
         for (num_index_pairs, indices) in rx {
@@ -270,12 +279,12 @@ impl CachedSymdel {
         let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
         let (tx, rx) = mpsc::channel();
         convergent_indices
-            .par_iter()
+            .into_par_iter()
+            .with_min_len(100000)
             .for_each_with(tx, |tx, (indices_query, indices_ref)| {
                 let pair_tuples = indices_query
                     .into_iter()
-                    .cartesian_product(*indices_ref)
-                    .map(|v| (*v.0, *v.1))
+                    .cartesian_product(indices_ref)
                     .collect_vec();
                 tx.send(pair_tuples).unwrap();
             });
@@ -319,7 +328,7 @@ pub fn get_candidates_within(
     let (tx, rx) = mpsc::channel();
     query
         .par_iter()
-        .with_min_len(10000)
+        .with_min_len(100000)
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -350,7 +359,7 @@ pub fn get_candidates_within(
     let (tx, rx) = mpsc::channel();
     convergent_indices
         .into_par_iter()
-        .with_min_len(10000)
+        .with_min_len(100000)
         .for_each_with(tx, |tx, indices| {
             let pair_tuples = indices.into_iter().tuple_combinations().collect_vec();
             tx.send(pair_tuples).unwrap();
@@ -390,6 +399,7 @@ pub fn get_candidates_cross(
     let (tx, rx) = mpsc::channel();
     query
         .par_iter()
+        .with_min_len(100000)
         .enumerate()
         .for_each_with(tx.clone(), |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -399,6 +409,7 @@ pub fn get_candidates_cross(
         });
     reference
         .par_iter()
+        .with_min_len(100000)
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -443,16 +454,16 @@ pub fn get_candidates_cross(
 
     let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
     let (tx, rx) = mpsc::channel();
-    convergent_indices.into_par_iter().for_each_with(
-        tx,
-        |tx, (indices_query, indices_reference)| {
+    convergent_indices
+        .into_par_iter()
+        .with_min_len(100000)
+        .for_each_with(tx, |tx, (indices_query, indices_reference)| {
             let pair_tuples = indices_query
                 .into_iter()
                 .cartesian_product(indices_reference)
                 .collect_vec();
             tx.send(pair_tuples).unwrap();
-        },
-    );
+        });
 
     for pair_tuples in rx {
         for pair in pair_tuples {
@@ -627,6 +638,7 @@ fn compute_dists(
 ) -> Vec<(usize, usize, u8)> {
     hit_candidates
         .into_par_iter()
+        .with_min_len(100000)
         .map(|(idx_query, idx_reference)| {
             let string_query = &query[idx_query];
             let string_reference = &reference[idx_reference];
