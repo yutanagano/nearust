@@ -319,6 +319,7 @@ pub fn get_candidates_within(
     let (tx, rx) = mpsc::channel();
     query
         .par_iter()
+        .with_min_len(10000)
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -349,6 +350,7 @@ pub fn get_candidates_within(
     let (tx, rx) = mpsc::channel();
     convergent_indices
         .into_par_iter()
+        .with_min_len(10000)
         .for_each_with(tx, |tx, indices| {
             let pair_tuples = indices.into_iter().tuple_combinations().collect_vec();
             tx.send(pair_tuples).unwrap();
