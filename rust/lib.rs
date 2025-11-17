@@ -23,7 +23,7 @@ enum CrossComparisonIndex {
 /// reference.
 pub struct CachedSymdel {
     reference: Vec<String>,
-    variant_map: HashMap<String, Vec<usize>>,
+    variant_map: HashMap<Box<str>, Vec<usize>>,
     max_distance: u8,
 }
 
@@ -522,15 +522,15 @@ where
 
 /// Given an input string, generate all possible strings after making at most max_deletions
 /// single-character deletions.
-fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<String> {
+fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
-    deletion_variants.push(input.to_string());
+    deletion_variants.push(input.to_string().into_boxed_str());
 
     for num_deletions in 1..=max_deletions {
         if num_deletions as usize > input_length {
-            deletion_variants.push("".to_string());
+            deletion_variants.push("".to_string().into_boxed_str());
             break;
         }
 
@@ -544,7 +544,7 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<String> {
             }
             variant.push_str(&input[offset..input_length]);
 
-            deletion_variants.push(variant);
+            deletion_variants.push(variant.into_boxed_str());
         }
     }
 
@@ -691,27 +691,27 @@ mod tests {
     #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants("foo", 1);
-        let expected = vec!["fo".to_string(), "foo".to_string(), "oo".to_string()];
+        let expected = vec!["fo".into(), "foo".into(), "oo".into()];
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants("foo", 2);
         let expected = vec![
-            "f".to_string(),
-            "fo".to_string(),
-            "foo".to_string(),
-            "o".to_string(),
-            "oo".to_string(),
+            "f".into(),
+            "fo".into(),
+            "foo".into(),
+            "o".into(),
+            "oo".into(),
         ];
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants("foo", 10);
         let expected = vec![
-            "".to_string(),
-            "f".to_string(),
-            "fo".to_string(),
-            "foo".to_string(),
-            "o".to_string(),
-            "oo".to_string(),
+            "".into(),
+            "f".into(),
+            "fo".into(),
+            "foo".into(),
+            "o".into(),
+            "oo".into(),
         ];
         assert_eq!(variants, expected);
     }
