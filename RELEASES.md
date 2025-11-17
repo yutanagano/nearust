@@ -1,3 +1,12 @@
+## Version 0.6.0
+
+- Change in return types of Python API:
+  - Previously returned Python list of tuples of integers
+  - Now returns three Numpy arrays
+- Performance improvements:
+  - Faster runtime thanks to more intelligent parallelisation and better memory allocation
+  - Lesser memory usage thanks to early dropping and use of more memory-efficient types
+
 ## Version 0.5.1
 
 - Performance improvements
