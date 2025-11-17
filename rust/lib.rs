@@ -4,10 +4,10 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::io;
 use std::io::{BufRead, Error, ErrorKind::InvalidData, Write};
 use std::usize;
 use std::{hash::Hash, sync::mpsc};
+use std::{io, mem, u8};
 
 mod pymod;
 
@@ -23,18 +23,30 @@ enum CrossComparisonIndex {
 /// reference.
 pub struct CachedSymdel {
     reference: Vec<String>,
-    variant_map: HashMap<String, Vec<usize>>,
-    max_distance: usize,
+    variant_map: HashMap<Box<str>, Vec<usize>>,
+    max_distance: u8,
 }
 
 impl CachedSymdel {
-    pub fn new(reference: Vec<String>, max_distance: usize) -> Self {
+    pub fn new(reference: Vec<String>, max_distance: u8) -> io::Result<Self> {
+        if max_distance == u8::MAX {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "max_distance must be less than {} (got {})",
+                    u8::MAX,
+                    max_distance
+                ),
+            ));
+        }
+
         let mut variant_map = HashMap::new();
         let hash_builder = variant_map.hasher();
         let (tx, rx) = mpsc::channel();
 
         reference
             .par_iter()
+            .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
                 let variants_and_hashes = get_deletion_variants(s, max_distance)
@@ -48,8 +60,8 @@ impl CachedSymdel {
                 transmitter.send((idx, variants_and_hashes)).unwrap();
             });
 
-        for (idx, mut variants_and_hashes) in rx {
-            for (variant, precomputed_hash) in variants_and_hashes.drain(..) {
+        for (idx, variants_and_hashes) in rx {
+            for (variant, precomputed_hash) in variants_and_hashes.into_iter() {
                 match variant_map
                     .raw_entry_mut()
                     .from_key_hashed_nocheck(precomputed_hash, &variant)
@@ -66,18 +78,18 @@ impl CachedSymdel {
             }
         }
 
-        CachedSymdel {
+        Ok(CachedSymdel {
             reference,
             variant_map,
             max_distance,
-        }
+        })
     }
 
     pub fn symdel_within(
         &self,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> io::Result<Vec<(usize, usize, usize)>> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -102,11 +114,12 @@ impl CachedSymdel {
         let (tx, rx) = mpsc::channel();
         convergent_indices
             .par_iter()
+            .with_min_len(100000)
             .for_each_with(tx, |transmitter, indices| {
                 let pair_tuples = indices
                     .iter()
-                    .combinations(2)
-                    .map(|v| (*v[0], *v[1]))
+                    .map(|&v| v)
+                    .tuple_combinations()
                     .collect_vec();
                 transmitter.send(pair_tuples).unwrap();
             });
@@ -117,11 +130,13 @@ impl CachedSymdel {
             }
         }
 
+        mem::drop(convergent_indices);
+
         hit_candidates.par_sort_unstable();
         hit_candidates.dedup();
 
         Ok(get_true_hits(
-            &hit_candidates,
+            hit_candidates,
             &self.reference,
             &self.reference,
             max_distance,
@@ -132,9 +147,9 @@ impl CachedSymdel {
     pub fn symdel_cross(
         &self,
         query: &[String],
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> io::Result<Vec<(usize, usize, usize)>> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -144,6 +159,7 @@ impl CachedSymdel {
         let (tx, rx) = mpsc::channel();
         query
             .par_iter()
+            .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
                 let variants = get_deletion_variants(s, max_distance);
@@ -167,22 +183,24 @@ impl CachedSymdel {
                 match self.variant_map.get(variant) {
                     None => return,
                     Some(indices_ref) => {
-                        let indices_query = group.iter().map(|(_, idx)| *idx).collect_vec();
+                        let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
                         total_num_index_pairs += indices_query.len() * indices_ref.len();
                         convergent_indices.push((indices_query, indices_ref));
                     }
                 }
             });
 
+        mem::drop(variant_index_pairs);
+
         let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
         let (tx, rx) = mpsc::channel();
         convergent_indices
-            .par_iter()
+            .into_par_iter()
+            .with_min_len(100000)
             .for_each_with(tx, |tx, (indices_query, indices_ref)| {
                 let pair_tuples = indices_query
                     .into_iter()
-                    .cartesian_product(*indices_ref)
-                    .map(|v| (*v.0, *v.1))
+                    .cartesian_product(indices_ref.iter().map(|&v| v))
                     .collect_vec();
                 tx.send(pair_tuples).unwrap();
             });
@@ -197,7 +215,7 @@ impl CachedSymdel {
         hit_candidates.dedup();
 
         Ok(get_true_hits(
-            &hit_candidates,
+            hit_candidates,
             query,
             &self.reference,
             max_distance,
@@ -208,9 +226,9 @@ impl CachedSymdel {
     pub fn symdel_cross_against_cached(
         &self,
         query: &Self,
-        max_distance: usize,
+        max_distance: u8,
         zero_index: bool,
-    ) -> io::Result<Vec<(usize, usize, usize)>> {
+    ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
@@ -259,12 +277,13 @@ impl CachedSymdel {
         let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
         let (tx, rx) = mpsc::channel();
         convergent_indices
-            .par_iter()
+            .into_par_iter()
+            .with_min_len(100000)
             .for_each_with(tx, |tx, (indices_query, indices_ref)| {
                 let pair_tuples = indices_query
-                    .into_iter()
-                    .cartesian_product(*indices_ref)
-                    .map(|v| (*v.0, *v.1))
+                    .iter()
+                    .map(|&v| v)
+                    .cartesian_product(indices_ref.iter().map(|&v| v))
                     .collect_vec();
                 tx.send(pair_tuples).unwrap();
             });
@@ -279,7 +298,7 @@ impl CachedSymdel {
         hit_candidates.dedup();
 
         Ok(get_true_hits(
-            &hit_candidates,
+            hit_candidates,
             &query.reference,
             &self.reference,
             max_distance,
@@ -288,16 +307,27 @@ impl CachedSymdel {
     }
 }
 
-pub fn symdel_within(
+pub fn get_candidates_within(
     query: &[String],
-    max_distance: usize,
-    zero_index: bool,
-) -> Vec<(usize, usize, usize)> {
+    max_distance: u8,
+) -> io::Result<Vec<(usize, usize)>> {
+    if max_distance == u8::MAX {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "max_distance must be less than {} (got {})",
+                u8::MAX,
+                max_distance
+            ),
+        ));
+    }
+
     let num_vi_pairs = get_num_vi_pairs(query, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
     let (tx, rx) = mpsc::channel();
     query
         .par_iter()
+        .with_min_len(100000)
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -323,17 +353,16 @@ pub fn symdel_within(
             convergent_indices.push(indices);
         });
 
+    mem::drop(variant_index_pairs);
+
     let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
     let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
     let (tx, rx) = mpsc::channel();
     convergent_indices
-        .par_iter()
+        .into_par_iter()
+        .with_min_len(100000)
         .for_each_with(tx, |tx, indices| {
-            let pair_tuples = indices
-                .iter()
-                .combinations(2)
-                .map(|v| (*v[0], *v[1]))
-                .collect_vec();
+            let pair_tuples = indices.into_iter().tuple_combinations().collect_vec();
             tx.send(pair_tuples).unwrap();
         });
 
@@ -346,21 +375,32 @@ pub fn symdel_within(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(&hit_candidates, query, query, max_distance, zero_index)
+    Ok(hit_candidates)
 }
 
-pub fn symdel_cross(
+pub fn get_candidates_cross(
     query: &[String],
     reference: &[String],
-    max_distance: usize,
-    zero_index: bool,
-) -> Vec<(usize, usize, usize)> {
+    max_distance: u8,
+) -> io::Result<Vec<(usize, usize)>> {
+    if max_distance == u8::MAX {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "max_distance must be less than {} (got {})",
+                u8::MAX,
+                max_distance
+            ),
+        ));
+    }
+
     let num_vi_query = get_num_vi_pairs(query, max_distance);
     let num_vi_reference = get_num_vi_pairs(reference, max_distance);
     let mut variant_index_pairs = Vec::with_capacity(num_vi_query + num_vi_reference);
     let (tx, rx) = mpsc::channel();
     query
         .par_iter()
+        .with_min_len(100000)
         .enumerate()
         .for_each_with(tx.clone(), |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -370,6 +410,7 @@ pub fn symdel_cross(
         });
     reference
         .par_iter()
+        .with_min_len(100000)
         .enumerate()
         .for_each_with(tx, |transmitter, (idx, s)| {
             let variants = get_deletion_variants(s, max_distance);
@@ -384,7 +425,7 @@ pub fn symdel_cross(
         }
     }
 
-    variant_index_pairs.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    variant_index_pairs.par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
 
     let mut convergent_indices = Vec::new();
     let mut total_num_index_pairs = 0;
@@ -398,9 +439,9 @@ pub fn symdel_cross(
             let mut indices_query = Vec::new();
             let mut indices_reference = Vec::new();
 
-            group.iter().for_each(|(_, idx)| match idx {
-                CrossComparisonIndex::Query(v) => indices_query.push(*v),
-                CrossComparisonIndex::Reference(v) => indices_reference.push(*v),
+            group.iter().for_each(|&(_, idx)| match idx {
+                CrossComparisonIndex::Query(v) => indices_query.push(v),
+                CrossComparisonIndex::Reference(v) => indices_reference.push(v),
             });
 
             let num_index_pairs = indices_query.len() * indices_reference.len();
@@ -412,15 +453,17 @@ pub fn symdel_cross(
             convergent_indices.push((indices_query, indices_reference));
         });
 
+    mem::drop(variant_index_pairs);
+
     let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
     let (tx, rx) = mpsc::channel();
     convergent_indices
-        .par_iter()
+        .into_par_iter()
+        .with_min_len(100000)
         .for_each_with(tx, |tx, (indices_query, indices_reference)| {
             let pair_tuples = indices_query
                 .into_iter()
                 .cartesian_product(indices_reference)
-                .map(|v| (*v.0, *v.1))
                 .collect_vec();
             tx.send(pair_tuples).unwrap();
         });
@@ -434,16 +477,16 @@ pub fn symdel_cross(
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
 
-    get_true_hits(&hit_candidates, query, reference, max_distance, zero_index)
+    Ok(hit_candidates)
 }
 
-fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
+fn get_num_vi_pairs(strings: &[String], max_distance: u8) -> usize {
     strings
         .iter()
         .map(|s| {
             let mut num_vi_pairs = 0;
             for k in 0..=max_distance {
-                if k > s.len() {
+                if k as usize > s.len() {
                     break;
                 }
                 num_vi_pairs += get_num_k_combs(s.len(), k);
@@ -453,16 +496,16 @@ fn get_num_vi_pairs(strings: &[String], max_distance: usize) -> usize {
         .sum()
 }
 
-fn get_num_k_combs(n: usize, k: usize) -> usize {
+fn get_num_k_combs(n: usize, k: u8) -> usize {
     assert!(n > 0);
-    assert!(n >= k);
+    assert!(n >= k as usize);
 
     if k == 0 {
         return 1;
     }
 
-    let num_subsamples: usize = (n - k + 1..=n).product();
-    let subsample_perms: usize = (1..=k).product();
+    let num_subsamples: usize = (n - k as usize + 1..=n).product();
+    let subsample_perms: usize = (1..=k as usize).product();
 
     return num_subsamples / subsample_perms;
 }
@@ -479,20 +522,20 @@ where
 
 /// Given an input string, generate all possible strings after making at most max_deletions
 /// single-character deletions.
-fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
+fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
-    deletion_variants.push(input.to_string());
+    deletion_variants.push(input.to_string().into_boxed_str());
 
     for num_deletions in 1..=max_deletions {
-        if num_deletions > input_length {
-            deletion_variants.push("".to_string());
+        if num_deletions as usize > input_length {
+            deletion_variants.push("".to_string().into_boxed_str());
             break;
         }
 
-        for deletion_indices in (0..input_length).combinations(num_deletions) {
-            let mut variant = String::with_capacity(input_length - num_deletions);
+        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
+            let mut variant = String::with_capacity(input_length - num_deletions as usize);
             let mut offset = 0;
 
             for idx in deletion_indices.iter() {
@@ -501,7 +544,7 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
             }
             variant.push_str(&input[offset..input_length]);
 
-            deletion_variants.push(variant);
+            deletion_variants.push(variant.into_boxed_str());
         }
     }
 
@@ -513,46 +556,34 @@ fn get_deletion_variants(input: &str, max_deletions: usize) -> Vec<String> {
 
 /// Examine and double check hits to see if they are real
 fn get_true_hits(
-    hit_candidates: &[(usize, usize)],
+    hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
-    max_distance: usize,
+    max_distance: u8,
     zero_index: bool,
-) -> Vec<(usize, usize, usize)> {
-    let candidates_with_dist: Vec<(usize, usize, usize)> = hit_candidates
-        .par_iter()
-        .map(|(idx_query, idx_reference)| {
-            let string_query = &query[*idx_query];
-            let string_reference = &reference[*idx_reference];
-            let dist = if (string_query.len() > string_reference.len()
-                && string_query.len() - string_reference.len() == max_distance)
-                || (string_query.len() < string_reference.len()
-                    && string_reference.len() - string_query.len() == max_distance)
-            {
-                max_distance
-            } else {
-                levenshtein::distance(string_query.chars(), string_reference.chars())
-            };
+) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+    let candidates_with_dist = compute_dists(hit_candidates, query, reference, max_distance);
 
-            (*idx_query, *idx_reference, dist)
-        })
-        .collect();
+    let mut q_indices = Vec::with_capacity(candidates_with_dist.len());
+    let mut ref_indices = Vec::with_capacity(candidates_with_dist.len());
+    let mut dists = Vec::with_capacity(candidates_with_dist.len());
 
-    let mut results = Vec::new();
-    for (a_idx, c_idx, dist) in candidates_with_dist {
-        if dist > max_distance {
+    for (qi, ri, d) in candidates_with_dist.into_iter() {
+        if d > max_distance {
             continue;
         }
-
-        let (a_idx_to_write, c_idx_to_write) = if zero_index {
-            (a_idx, c_idx)
+        if zero_index {
+            q_indices.push(qi);
+            ref_indices.push(ri);
+            dists.push(d);
         } else {
-            (a_idx + 1, c_idx + 1)
-        };
-
-        results.push((a_idx_to_write, c_idx_to_write, dist));
+            q_indices.push(qi + 1);
+            ref_indices.push(ri + 1);
+            dists.push(d);
+        }
     }
-    results
+
+    (q_indices, ref_indices, dists)
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
@@ -580,10 +611,59 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
 }
 
 /// Write to stdout
-pub fn write_results(results: Vec<(usize, usize, usize)>, writer: &mut impl Write) {
-    for (a_idx_to_write, c_idx_to_write, dist) in results.iter() {
-        write!(writer, "{},{},{}\n", a_idx_to_write, c_idx_to_write, dist).unwrap();
+pub fn write_true_results(
+    hit_candidates: Vec<(usize, usize)>,
+    query: &[String],
+    reference: &[String],
+    max_distance: u8,
+    zero_index: bool,
+    writer: &mut impl Write,
+) {
+    let candidates_with_dists = compute_dists(hit_candidates, query, reference, max_distance);
+    for (q_idx, ref_idx, dist) in candidates_with_dists.iter() {
+        if *dist > max_distance {
+            continue;
+        }
+
+        if zero_index {
+            write!(writer, "{},{},{}\n", q_idx, ref_idx, dist).unwrap();
+        } else {
+            write!(writer, "{},{},{}\n", q_idx + 1, ref_idx + 1, dist).unwrap();
+        }
     }
+}
+
+fn compute_dists(
+    hit_candidates: Vec<(usize, usize)>,
+    query: &[String],
+    reference: &[String],
+    max_distance: u8,
+) -> Vec<(usize, usize, u8)> {
+    hit_candidates
+        .into_par_iter()
+        .with_min_len(100000)
+        .map(|(idx_query, idx_reference)| {
+            let string_query = &query[idx_query];
+            let string_reference = &reference[idx_reference];
+            let dist = if (string_query.len() > string_reference.len()
+                && string_query.len() - string_reference.len() == max_distance as usize)
+                || (string_query.len() < string_reference.len()
+                    && string_reference.len() - string_query.len() == max_distance as usize)
+            {
+                max_distance
+            } else {
+                let full_dist =
+                    levenshtein::distance(string_query.chars(), string_reference.chars());
+                if full_dist > max_distance as usize {
+                    u8::MAX
+                } else {
+                    full_dist as u8
+                }
+            };
+
+            (idx_query, idx_reference, dist)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -611,27 +691,27 @@ mod tests {
     #[test]
     fn test_get_deletion_variants() {
         let variants = get_deletion_variants("foo", 1);
-        let expected = vec!["fo".to_string(), "foo".to_string(), "oo".to_string()];
+        let expected = vec!["fo".into(), "foo".into(), "oo".into()];
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants("foo", 2);
         let expected = vec![
-            "f".to_string(),
-            "fo".to_string(),
-            "foo".to_string(),
-            "o".to_string(),
-            "oo".to_string(),
+            "f".into(),
+            "fo".into(),
+            "foo".into(),
+            "o".into(),
+            "oo".into(),
         ];
         assert_eq!(variants, expected);
 
         let variants = get_deletion_variants("foo", 10);
         let expected = vec![
-            "".to_string(),
-            "f".to_string(),
-            "fo".to_string(),
-            "foo".to_string(),
-            "o".to_string(),
-            "oo".to_string(),
+            "".into(),
+            "f".into(),
+            "fo".into(),
+            "foo".into(),
+            "o".into(),
+            "oo".into(),
         ];
         assert_eq!(variants, expected);
     }
@@ -662,8 +742,15 @@ mod tests {
         f.read_to_end(&mut expected_output).unwrap();
 
         let mut test_output_stream = Vec::new();
-        let results = symdel_within(&test_input, 1, false);
-        write_results(results, &mut test_output_stream);
+        let results = get_candidates_within(&test_input, 1).unwrap();
+        write_true_results(
+            results,
+            &test_input,
+            &test_input,
+            1,
+            false,
+            &mut test_output_stream,
+        );
 
         assert_eq!(test_output_stream, expected_output);
 
@@ -673,8 +760,15 @@ mod tests {
         let mut f = BufReader::new(File::open("test_files/results_10k_a_d2.txt").unwrap());
         f.read_to_end(&mut expected_output).unwrap();
 
-        let results = symdel_within(&test_input, 2, false);
-        write_results(results, &mut test_output_stream);
+        let results = get_candidates_within(&test_input, 2).unwrap();
+        write_true_results(
+            results,
+            &test_input,
+            &test_input,
+            2,
+            false,
+            &mut test_output_stream,
+        );
 
         assert_eq!(test_output_stream, expected_output)
     }
@@ -692,8 +786,15 @@ mod tests {
         f.read_to_end(&mut expected_output).unwrap();
 
         let mut test_output_stream = Vec::new();
-        let results = symdel_cross(&primary_input, &comparison_input, 1, false);
-        write_results(results, &mut test_output_stream);
+        let results = get_candidates_cross(&primary_input, &comparison_input, 1).unwrap();
+        write_true_results(
+            results,
+            &primary_input,
+            &comparison_input,
+            1,
+            false,
+            &mut test_output_stream,
+        );
 
         assert_eq!(test_output_stream, expected_output);
 
@@ -703,10 +804,38 @@ mod tests {
         let mut f = BufReader::new(File::open("test_files/results_10k_cross_d2.txt").unwrap());
         f.read_to_end(&mut expected_output).unwrap();
 
-        let results = symdel_cross(&primary_input, &comparison_input, 2, false);
-        write_results(results, &mut test_output_stream);
+        let results = get_candidates_cross(&primary_input, &comparison_input, 2).unwrap();
+        write_true_results(
+            results,
+            &primary_input,
+            &comparison_input,
+            2,
+            false,
+            &mut test_output_stream,
+        );
 
         assert_eq!(test_output_stream, expected_output);
+    }
+
+    fn written_to_coo(in_stream: impl BufRead) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+        let mut q_indices = Vec::new();
+        let mut ref_indices = Vec::new();
+        let mut dists = Vec::new();
+
+        for line_res in in_stream.lines() {
+            let line = line_res.unwrap();
+            let mut parts = line.split(",");
+
+            let qi = parts.next().unwrap().parse::<usize>().unwrap();
+            let ri = parts.next().unwrap().parse::<usize>().unwrap();
+            let d = parts.next().unwrap().parse::<usize>().unwrap();
+
+            q_indices.push(qi);
+            ref_indices.push(ri);
+            dists.push(d as u8);
+        }
+
+        (q_indices, ref_indices, dists)
     }
 
     #[test]
@@ -714,17 +843,13 @@ mod tests {
         let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
         let test_input = get_input_lines_as_ascii(f).unwrap();
 
-        let mut f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
+        let f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
+        let expected_output = written_to_coo(f);
 
-        let mut test_output_stream = Vec::new();
-
-        let cached = CachedSymdel::new(test_input, 1);
+        let cached = CachedSymdel::new(test_input, 1).unwrap();
         let results = cached.symdel_within(1, false).unwrap();
-        write_results(results, &mut test_output_stream);
 
-        assert_eq!(test_output_stream, expected_output);
+        assert_eq!(results, expected_output);
     }
 
     #[test]
@@ -735,17 +860,13 @@ mod tests {
         let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
         let comparison_input = get_input_lines_as_ascii(f).unwrap();
 
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
+        let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
+        let expected_output = written_to_coo(f);
 
-        let mut test_output_stream = Vec::new();
+        let cached = CachedSymdel::new(comparison_input, 1).unwrap();
+        let results = cached.symdel_cross(&primary_input, 1, false).unwrap();
 
-        let ccsd = CachedSymdel::new(comparison_input, 1);
-        let results = ccsd.symdel_cross(&primary_input, 1, false).unwrap();
-        write_results(results, &mut test_output_stream);
-
-        assert_eq!(test_output_stream, expected_output);
+        assert_eq!(results, expected_output);
     }
 
     #[test]
@@ -756,19 +877,15 @@ mod tests {
         let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
         let comparison_input = get_input_lines_as_ascii(f).unwrap();
 
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let mut expected_output = Vec::new();
-        let _ = f.read_to_end(&mut expected_output);
+        let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
+        let expected_output = written_to_coo(f);
 
-        let mut test_output_stream = Vec::new();
-
-        let cached_query = CachedSymdel::new(primary_input, 1);
-        let cached_reference = CachedSymdel::new(comparison_input, 1);
+        let cached_query = CachedSymdel::new(primary_input, 1).unwrap();
+        let cached_reference = CachedSymdel::new(comparison_input, 1).unwrap();
         let results = cached_reference
             .symdel_cross_against_cached(&cached_query, 1, false)
             .unwrap();
-        write_results(results, &mut test_output_stream);
 
-        assert_eq!(test_output_stream, expected_output);
+        assert_eq!(results, expected_output);
     }
 }
