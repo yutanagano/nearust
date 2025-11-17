@@ -140,7 +140,7 @@ class CachedSymdel:
 
         Returns
         -------
-        .. note::
+        .. tip::
             If `query` is set to another CachedSymdel instance constructed
             using some set of strings X, then the resulting computation is
             equivalent to setting `query` to X directly. This is useful in
