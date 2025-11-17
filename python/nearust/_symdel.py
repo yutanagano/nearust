@@ -1,4 +1,6 @@
 import nearust._lib as rustlib
+import numpy as np
+from numpy.typing import NDArray
 from typing import Iterable, Optional
 
 
@@ -7,7 +9,7 @@ def symdel(
     reference: Optional[Iterable[str]] = None,
     max_distance: int = 1,
     zero_index: bool = True,
-) -> list[tuple[int, int, int]]:
+) -> tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint8]]:
     """
     Quickly detects pairs of similar strings.
 
@@ -16,25 +18,27 @@ def symdel(
     query : iterable of str
     reference : iterable of str, optional
     max_distance : int, default=1
-        The maximum edit distance at which strings are considered neighbours.
+        The maximum edit distance at which strings are considered neighbors.
     zero_index : bool, default=True
         If set to True, reports the indices of strings of interest using
         0-based indexing. Otherwise uses 1-based indexing.
 
     Returns
     -------
-    list of tuple of int, int, int
-        A list of integer triplets, where each triplet describes a pair of
-        strings that were detected as being neighbours. The first two ints
-        describe the indices of the two strings in the pair, and the third
-        int describes the Levenshtein edit distance between them.
+    i : ndarray of shape (N,), dtype=uint64
+        Indices of strings in the query that have neighbors.
 
-        If symdel was only given `query` as input, then it returns pairs of
-        strings from within `query` that are neighbours. If symdel was given
-        both `query` and `reference`, then it returns string pairs across the
-        two sets. In this case, the first index always corresponds to a string
-        from `query`, and the second index always corresponds to a string from
-        `reference`.
+    j : ndarray of shape (N,), dtype=uint64
+        Indices of neighbor strings. If only the `query` parameter was set,
+        then ``query[i[k]]`` and ``query[j[k]]`` are neighbors. If both `query`
+        and `reference` parameters were set, then ``query[i[k]]`` and
+        ``reference[j[k]]`` are neighbors.
+
+    dists : ndarray of shape (N,), dtype=uint8
+        Edit distances between neighbors. If only the `query` parameter was
+        set, then ``Levenshtein(query[i[k]], query[j[k]]) = dists[k]``. If both
+        `query` and `reference` parameters were set, then
+        ``Levenshtein(query[i[k]], reference[j[k]]) = dists[k]``.
 
     Examples
     --------
@@ -42,27 +46,47 @@ def symdel(
     within it.
 
     >>> import nearust
-    >>> nearust.symdel(["fizz", "fuzz", "buzz"])
-    [(0, 1, 1), (1, 2, 1)]
+    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"])
+    >>> i
+    array([0, 1], dtype=uint64)
+    >>> j
+    array([1, 2], dtype=uint64)
+    >>> dists
+    array([1, 1], dtype=uint8)
 
     To increase the threshold at which string pairs are considered similar, set
     `max_distance`.
 
-    >>> nearust.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
-    [(0, 1, 1), (0, 2, 2), (1, 2, 1)]
+    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
+    >>> i
+    array([0, 0, 1], dtype=uint64)
+    >>> j
+    array([1, 2, 2], dtype=uint64)
+    >>> dists
+    array([1, 2, 1], dtype=uint8)
 
-    To look for pairs of similar strings across two sets, set both provide two
-    iterables over strings (`query` and `reference`).
+    To look for pairs of similar strings across two sets, provide two iterables
+    over strings (`query` and `reference`).
 
-    >>> nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
-    [(1, 3, 1), (2, 2, 1), (2, 3, 0)]
+    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
+    >>> i
+    array([1, 2, 2], dtype=uint64)
+    >>> j
+    array([3, 2, 3], dtype=uint64)
+    >>> dists
+    array([1, 1, 0], dtype=uint8)
 
     If you would like the string indices returned to be 1-based instead of
     0-based (in a manner similar to the default behaviour of the CLI), you can
     set `zero_index` to False.
 
-    >>> nearust.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
-    [(1, 2, 1), (2, 3, 1)]
+    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
+    >>> i
+    array([1, 2], dtype=uint64)
+    >>> j
+    array([2, 3], dtype=uint64)
+    >>> dists
+    array([1, 1], dtype=uint8)
     """
     if reference is not None:
         return rustlib.symdel_cross(query, reference, max_distance, zero_index)
@@ -116,25 +140,28 @@ class CachedSymdel:
 
         Returns
         -------
-        list of tuple of int, int, int
-            A list of integer triplets, where each triplet describes a pair of
-            strings that were detected as being neighbours. The first two ints
-            describe the indices of the two strings in the pair, and the third
-            int describes the Levenshtein edit distance between them.
+        .. note::
+            If `query` is set to another CachedSymdel instance constructed
+            using some set of strings X, then the resulting computation is
+            equivalent to setting `query` to X directly. This is useful in
+            cases where you want to memoize deletion variant computations for
+            both query and reference sets.
 
-            If `query` is not set (or set to None), the function computes
-            symdel for pairs of strings within `reference` (specified when
-            constructing the class). If `query` is set, the function computes
-            symdel for pairs of strings between the query and reference. In
-            this case, the first index in the triplet always corresponds to a
-            string from `query`, and the second index always corresponds to a
-            string from `reference`.
+        i : ndarray of shape (N,), dtype=uint64
+            Indices of strings in the query that have neighbors.
 
-            Note that if `query` is set to another CachedSymdel instance
-            constructed using some set of strings X, then the resulting
-            computation is equivalent to setting `query` to X directly. This is
-            useful in cases where you want to memoize deletion variant
-            computations for both query and reference sets.
+        j : ndarray of shape (N,), dtype=uint64
+            Indices of neighbor strings. If only the `query` parameter was set,
+            then ``query[i[k]]`` and ``query[j[k]]`` are neighbors. If both
+            `query` and `reference` parameters were set, then ``query[i[k]]``
+            and ``reference[j[k]]`` are neighbors.
+
+        dists : ndarray of shape (N,), dtype=uint8
+            Edit distances between neighbors. If only the `query` parameter was
+            set, then ``Levenshtein(query[i[k]], query[j[k]]) = dists[k]``. If
+            both `query` and `reference` parameters were set, then
+            ``Levenshtein(query[i[k]], reference[j[k]]) = dists[k]``.
+
 
         Examples
         --------
@@ -149,31 +176,56 @@ class CachedSymdel:
         Then, call the symdel method with `query` set to an iterable over query
         strings to find similar strings across it and the reference set.
 
-        >>> cached.symdel(["fizz", "fuzz", "buzz"])
-        [(1, 3, 1), (2, 2, 1), (2, 3, 0)]
+        >>> (i, j, dists) = cached.symdel(["fizz", "fuzz", "buzz"])
+        >>> i
+        array([1, 2, 2], dtype=uint64)
+        >>> j
+        array([3, 2, 3], dtype=uint64)
+        >>> dists
+        array([1, 1, 0], dtype=uint8)
 
         If you also want to memoize deletion variant computations on the query
         set as well, you can do so.
 
         >>> cached_query = nearust.CachedSymdel(["fizz", "fuzz", "buzz"])
-        >>> cached.symdel(cached_query)
-        [(1, 3, 1), (2, 2, 1), (2, 3, 0)]
+        >>> (i, j, dists) = cached.symdel(cached_query)
+        >>> i
+        array([1, 2, 2], dtype=uint64)
+        >>> j
+        array([3, 2, 3], dtype=uint64)
+        >>> dists
+        array([1, 1, 0], dtype=uint8)
 
         If you call symdel without specifying `query`, the function will look
         for pairs of similar strings within the reference set.
 
-        >>> cached.symdel()
-        [(2, 3, 1)]
+        >>> (i, j, dists) = cached.symdel()
+        >>> i
+        array([2], dtype=uint64)
+        >>> j
+        array([3], dtype=uint64)
+        >>> dists
+        array([1], dtype=uint8)
 
         For a CachedSymdel instance to support calls to symdel with
         `max_distance` equal to X, it `max_distance` must be set to X or
         greater at construction time.
 
         >>> cached_maxd2 = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
-        >>> cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
-        [(0, 2, 2), (0, 3, 2), (1, 2, 2), (1, 3, 1), (2, 2, 1), (2, 3, 0)]
-        >>> cached_maxd2.symdel(["fizz", "fuzz", "buzz"])
-        [(1, 3, 1), (2, 2, 1), (2, 3, 0)]
+        >>> (i, j, dists) = cached_maxd2.symdel(["fizz", "fuzz", "buzz"])
+        >>> i
+        array([1, 2, 2], dtype=uint64)
+        >>> j
+        array([3, 2, 3], dtype=uint64)
+        >>> dists
+        array([1, 1, 0], dtype=uint8)
+        >>> (i, j, dists) = cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
+        >>> i
+        array([0, 0, 1, 1, 2, 2], dtype=uint64)
+        >>> j
+        array([2, 3, 2, 3, 2, 3], dtype=uint64)
+        >>> dists
+        array([2, 2, 2, 1, 1, 0], dtype=uint8)
         >>> # max_distance > 2 will throw an error!: cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=3)
         """
         if query is None:
