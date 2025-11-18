@@ -95,19 +95,12 @@ impl CachedSymdel {
         }
 
         let mut convergent_indices = Vec::new();
-        let (tx, rx) = mpsc::channel();
-        self.variant_map
-            .par_iter()
-            .for_each_with(tx, |transmitter, (_, indices)| {
-                if indices.len() == 1 {
-                    return;
-                }
-                transmitter.send(indices).unwrap();
-            });
-
-        for indices in rx {
+        self.variant_map.iter().for_each(|(_, indices)| {
+            if indices.len() == 1 {
+                return;
+            }
             convergent_indices.push(indices);
-        }
+        });
 
         let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
@@ -157,7 +150,6 @@ impl CachedSymdel {
         variant_index_pairs.dedup();
 
         let mut convergent_indices = Vec::new();
-        let mut total_num_index_pairs = 0;
         variant_index_pairs
             .chunk_by(|(v1, _), (v2, _)| v1 == v2)
             .for_each(|group| {
@@ -166,7 +158,6 @@ impl CachedSymdel {
                     None => return,
                     Some(indices_ref) => {
                         let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                        total_num_index_pairs += indices_query.len() * indices_ref.len();
                         convergent_indices.push((indices_query, indices_ref));
                     }
                 }
@@ -174,27 +165,7 @@ impl CachedSymdel {
 
         mem::drop(variant_index_pairs);
 
-        let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
-        let (tx, rx) = mpsc::channel();
-        convergent_indices
-            .into_par_iter()
-            .with_min_len(100000)
-            .for_each_with(tx, |tx, (indices_query, indices_ref)| {
-                let pair_tuples = indices_query
-                    .into_iter()
-                    .cartesian_product(indices_ref.iter().map(|&v| v))
-                    .collect_vec();
-                tx.send(pair_tuples).unwrap();
-            });
-
-        for pair_tuples in rx {
-            for pair in pair_tuples {
-                hit_candidates.push(pair);
-            }
-        }
-
-        hit_candidates.par_sort_unstable();
-        hit_candidates.dedup();
+        let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
         Ok(get_true_hits(
             hit_candidates,
@@ -220,64 +191,27 @@ impl CachedSymdel {
         }
 
         let mut convergent_indices = Vec::new();
-        let mut total_num_index_pairs = 0;
-        let (tx, rx) = mpsc::channel();
         if query.variant_map.len() < self.variant_map.len() {
-            query.variant_map.par_iter().for_each_with(
-                tx,
-                |transmitter, (variant, indices_query)| match self.variant_map.get(variant) {
+            query.variant_map.iter().for_each(|(variant, indices_q)| {
+                match self.variant_map.get(variant) {
                     None => return,
                     Some(indices_ref) => {
-                        let num_index_pairs = indices_query.len() * indices_ref.len();
-                        transmitter
-                            .send((num_index_pairs, (indices_query, indices_ref)))
-                            .unwrap();
+                        convergent_indices.push((indices_q, indices_ref));
                     }
-                },
-            );
-        } else {
-            self.variant_map
-                .par_iter()
-                .for_each_with(tx, |transmitter, (variant, indices_ref)| {
-                    match query.variant_map.get(variant) {
-                        None => return,
-                        Some(indices_query) => {
-                            let num_index_pairs = indices_query.len() * indices_ref.len();
-                            transmitter
-                                .send((num_index_pairs, (indices_query, indices_ref)))
-                                .unwrap();
-                        }
-                    }
-                });
-        }
-
-        for (num_index_pairs, indices) in rx {
-            total_num_index_pairs += num_index_pairs;
-            convergent_indices.push(indices);
-        }
-
-        let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
-        let (tx, rx) = mpsc::channel();
-        convergent_indices
-            .into_par_iter()
-            .with_min_len(100000)
-            .for_each_with(tx, |tx, (indices_query, indices_ref)| {
-                let pair_tuples = indices_query
-                    .iter()
-                    .map(|&v| v)
-                    .cartesian_product(indices_ref.iter().map(|&v| v))
-                    .collect_vec();
-                tx.send(pair_tuples).unwrap();
+                }
             });
-
-        for pair_tuples in rx {
-            for pair in pair_tuples {
-                hit_candidates.push(pair);
-            }
+        } else {
+            self.variant_map.iter().for_each(|(variant, indices_r)| {
+                match query.variant_map.get(variant) {
+                    None => return,
+                    Some(indices_query) => {
+                        convergent_indices.push((indices_query, indices_r));
+                    }
+                }
+            });
         }
 
-        hit_candidates.par_sort_unstable();
-        hit_candidates.dedup();
+        let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
         Ok(get_true_hits(
             hit_candidates,
@@ -410,7 +344,6 @@ pub fn get_candidates_cross(
     variant_index_pairs.dedup();
 
     let mut convergent_indices = Vec::new();
-    let mut total_num_index_pairs = 0;
     variant_index_pairs
         .chunk_by(|(v1, _), (v2, _)| v1 == v2)
         .for_each(|group| {
@@ -431,33 +364,12 @@ pub fn get_candidates_cross(
                 return;
             }
 
-            total_num_index_pairs += num_index_pairs;
             convergent_indices.push((indices_query, indices_reference));
         });
 
     mem::drop(variant_index_pairs);
 
-    let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
-    let (tx, rx) = mpsc::channel();
-    convergent_indices
-        .into_par_iter()
-        .with_min_len(100000)
-        .for_each_with(tx, |tx, (indices_query, indices_reference)| {
-            let pair_tuples = indices_query
-                .into_iter()
-                .cartesian_product(indices_reference)
-                .collect_vec();
-            tx.send(pair_tuples).unwrap();
-        });
-
-    for pair_tuples in rx {
-        for pair in pair_tuples {
-            hit_candidates.push(pair);
-        }
-    }
-
-    hit_candidates.par_sort_unstable();
-    hit_candidates.dedup();
+    let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
     Ok(hit_candidates)
 }
@@ -634,6 +546,51 @@ where
                 .iter()
                 .map(|&v| v)
                 .tuple_combinations()
+                .enumerate()
+            {
+                chunk[i] = candidate;
+            }
+        });
+
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+
+    hit_candidates
+}
+
+fn get_hit_candidates_from_cis_cross<T, U>(convergent_indices: &[(T, U)]) -> Vec<(usize, usize)>
+where
+    (T, U): Sync,
+    T: AsRef<[usize]>,
+    U: AsRef<[usize]>,
+{
+    let num_hit_candidates = convergent_indices
+        .iter()
+        .map(|(qi, ri)| qi.as_ref().len() * ri.as_ref().len())
+        .collect_vec();
+
+    let total_capacity = num_hit_candidates.iter().sum();
+    let mut hit_candidates = Vec::with_capacity(total_capacity);
+    unsafe { hit_candidates.set_len(total_capacity) };
+
+    let mut hc_chunks: Vec<&mut [(usize, usize)]> = Vec::with_capacity(convergent_indices.len());
+    let mut remaining = &mut hit_candidates[..];
+    for n in num_hit_candidates {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        hc_chunks.push(chunk);
+        remaining = rest;
+    }
+
+    convergent_indices
+        .par_iter()
+        .zip(hc_chunks.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|((indices_q, indices_r), chunk)| {
+            for (i, candidate) in indices_q
+                .as_ref()
+                .iter()
+                .map(|&v| v)
+                .cartesian_product(indices_r.as_ref().iter().map(|&v| v))
                 .enumerate()
             {
                 chunk[i] = candidate;
