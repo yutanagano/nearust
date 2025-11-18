@@ -109,31 +109,7 @@ impl CachedSymdel {
             convergent_indices.push(indices);
         }
 
-        let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
-        let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
-        let (tx, rx) = mpsc::channel();
-        convergent_indices
-            .par_iter()
-            .with_min_len(100000)
-            .for_each_with(tx, |transmitter, indices| {
-                let pair_tuples = indices
-                    .iter()
-                    .map(|&v| v)
-                    .tuple_combinations()
-                    .collect_vec();
-                transmitter.send(pair_tuples).unwrap();
-            });
-
-        for pair_tuples in rx {
-            for pair in pair_tuples {
-                hit_candidates.push(pair);
-            }
-        }
-
-        mem::drop(convergent_indices);
-
-        hit_candidates.par_sort_unstable();
-        hit_candidates.dedup();
+        let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
         Ok(get_true_hits(
             hit_candidates,
@@ -367,25 +343,7 @@ pub fn get_candidates_within(
 
     mem::drop(variant_index_pairs);
 
-    let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
-    let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
-    let (tx, rx) = mpsc::channel();
-    convergent_indices
-        .into_par_iter()
-        .with_min_len(100000)
-        .for_each_with(tx, |tx, indices| {
-            let pair_tuples = indices.into_iter().tuple_combinations().collect_vec();
-            tx.send(pair_tuples).unwrap();
-        });
-
-    for pair_tuples in rx {
-        for pair in pair_tuples {
-            hit_candidates.push(pair);
-        }
-    }
-
-    hit_candidates.par_sort_unstable();
-    hit_candidates.dedup();
+    let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
     Ok(hit_candidates)
 }
@@ -534,16 +492,6 @@ fn get_num_k_combs(n: usize, k: u8) -> usize {
     return num_subsamples / subsample_perms;
 }
 
-fn get_num_hit_candidates<T>(convergent_indices: &[T]) -> usize
-where
-    T: AsRef<[usize]>,
-{
-    convergent_indices
-        .iter()
-        .map(|indices| get_num_k_combs(indices.as_ref().len(), 2))
-        .sum()
-}
-
 /// Given an input string and its index in the original input vector, generate all possible strings
 /// after making at most max_deletions single-character deletions and write them into the slots in
 /// the provided chunk, as 2-tuples (variant, input_idx).
@@ -621,8 +569,8 @@ fn write_deletion_variants_cci(
     }
 }
 
-/// Given an input string, generate all possible strings after making at most max_deletions
-/// single-character deletions.
+/// Similar to the write_deletion_variants functions but instead of writing to slots in a slice,
+/// returns a vector containing the variants.
 fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
     let input_length = input.len();
 
@@ -653,6 +601,49 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
     deletion_variants.dedup();
 
     deletion_variants
+}
+
+fn get_hit_candidates_from_cis_within<T>(convergent_indices: &[T]) -> Vec<(usize, usize)>
+where
+    T: AsRef<[usize]> + Sync,
+{
+    let num_hit_candidates = convergent_indices
+        .iter()
+        .map(|indices| get_num_k_combs(indices.as_ref().len(), 2))
+        .collect_vec();
+
+    let total_capacity = num_hit_candidates.iter().sum();
+    let mut hit_candidates = Vec::with_capacity(total_capacity);
+    unsafe { hit_candidates.set_len(total_capacity) };
+
+    let mut hc_chunks: Vec<&mut [(usize, usize)]> = Vec::with_capacity(convergent_indices.len());
+    let mut remaining = &mut hit_candidates[..];
+    for n in num_hit_candidates {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        hc_chunks.push(chunk);
+        remaining = rest;
+    }
+
+    convergent_indices
+        .par_iter()
+        .zip(hc_chunks.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|(indices, chunk)| {
+            for (i, candidate) in indices
+                .as_ref()
+                .iter()
+                .map(|&v| v)
+                .tuple_combinations()
+                .enumerate()
+            {
+                chunk[i] = candidate;
+            }
+        });
+
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+
+    hit_candidates
 }
 
 /// Examine and double check hits to see if they are real
@@ -815,13 +806,6 @@ mod tests {
             "oo".into(),
         ];
         assert_eq!(variants, expected);
-    }
-
-    #[test]
-    fn test_get_num_hit_candidates() {
-        let convergent_indices = &[vec![1, 2, 3], vec![1, 2, 3, 4], vec![1, 2]];
-        let result = get_num_hit_candidates(convergent_indices);
-        assert_eq!(result, 10);
     }
 
     #[test]
