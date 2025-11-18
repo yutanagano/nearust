@@ -121,7 +121,7 @@ class CachedSymdel:
         query: Iterable[str] | "CachedSymdel" | None = None,
         max_distance: int = 1,
         zero_index: bool = True,
-    ) -> list[tuple[int, int, int]]:
+    ) -> tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint8]]:
         """
         Quickly detects pairs of similar strings.
 
