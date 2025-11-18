@@ -4,10 +4,10 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::io::{BufRead, Error, ErrorKind::InvalidData, Write};
-use std::usize;
-use std::{hash::Hash, sync::mpsc};
-use std::{io, mem, u8};
+use std::hash::Hash;
+use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
+use std::sync::mpsc;
+use std::{u8, usize};
 
 mod pymod;
 
@@ -123,47 +123,49 @@ impl CachedSymdel {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
 
-        let num_del_variants = get_num_deletion_variants(query, max_distance);
+        let convergent_indices = {
+            let num_del_variants = get_num_deletion_variants(query, max_distance);
 
-        let total_capacity = num_del_variants.iter().sum();
-        let mut variant_index_pairs = Vec::with_capacity(total_capacity);
-        unsafe { variant_index_pairs.set_len(total_capacity) };
+            let total_capacity = num_del_variants.iter().sum();
+            let mut variant_index_pairs = Vec::with_capacity(total_capacity);
+            unsafe { variant_index_pairs.set_len(total_capacity) };
 
-        let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
-        let mut remaining = &mut variant_index_pairs[..];
-        for n in num_del_variants {
-            let (chunk, rest) = remaining.split_at_mut(n);
-            vip_chunks.push(chunk);
-            remaining = rest;
-        }
+            let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
+            let mut remaining = &mut variant_index_pairs[..];
+            for n in num_del_variants {
+                let (chunk, rest) = remaining.split_at_mut(n);
+                vip_chunks.push(chunk);
+                remaining = rest;
+            }
 
-        query
-            .par_iter()
-            .enumerate()
-            .zip(vip_chunks.into_par_iter())
-            .with_min_len(100000)
-            .for_each(|((idx, s), chunk)| {
-                write_deletion_variants_rawidx(s, idx, max_distance, chunk);
-            });
+            query
+                .par_iter()
+                .enumerate()
+                .zip(vip_chunks.into_par_iter())
+                .with_min_len(100000)
+                .for_each(|((idx, s), chunk)| {
+                    write_deletion_variants_rawidx(s, idx, max_distance, chunk);
+                });
 
-        variant_index_pairs.par_sort_unstable();
-        variant_index_pairs.dedup();
+            variant_index_pairs.par_sort_unstable();
+            variant_index_pairs.dedup();
 
-        let mut convergent_indices = Vec::new();
-        variant_index_pairs
-            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-            .for_each(|group| {
-                let variant = &group[0].0;
-                match self.variant_map.get(variant) {
-                    None => return,
-                    Some(indices_ref) => {
-                        let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                        convergent_indices.push((indices_query, indices_ref));
+            let mut convergent_indices = Vec::new();
+            variant_index_pairs
+                .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+                .for_each(|group| {
+                    let variant = &group[0].0;
+                    match self.variant_map.get(variant) {
+                        None => return,
+                        Some(indices_ref) => {
+                            let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
+                            convergent_indices.push((indices_query, indices_ref));
+                        }
                     }
-                }
-            });
+                });
 
-        mem::drop(variant_index_pairs);
+            convergent_indices
+        };
 
         let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
@@ -238,44 +240,46 @@ pub fn get_candidates_within(
         ));
     }
 
-    let num_del_variants = get_num_deletion_variants(query, max_distance);
+    let convergent_indices = {
+        let num_del_variants = get_num_deletion_variants(query, max_distance);
 
-    let total_capacity = num_del_variants.iter().sum();
-    let mut variant_index_pairs = Vec::with_capacity(total_capacity);
-    unsafe { variant_index_pairs.set_len(total_capacity) };
+        let total_capacity = num_del_variants.iter().sum();
+        let mut variant_index_pairs = Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs.set_len(total_capacity) };
 
-    let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
-    let mut remaining = &mut variant_index_pairs[..];
-    for n in num_del_variants {
-        let (chunk, rest) = remaining.split_at_mut(n);
-        vip_chunks.push(chunk);
-        remaining = rest;
-    }
+        let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
+        let mut remaining = &mut variant_index_pairs[..];
+        for n in num_del_variants {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks.push(chunk);
+            remaining = rest;
+        }
 
-    query
-        .par_iter()
-        .enumerate()
-        .zip(vip_chunks.into_par_iter())
-        .with_min_len(100000)
-        .for_each(|((idx, s), chunk)| {
-            write_deletion_variants_rawidx(s, idx, max_distance, chunk);
-        });
+        query
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_rawidx(s, idx, max_distance, chunk);
+            });
 
-    variant_index_pairs.par_sort_unstable();
-    variant_index_pairs.dedup();
+        variant_index_pairs.par_sort_unstable();
+        variant_index_pairs.dedup();
 
-    let mut convergent_indices = Vec::new();
-    variant_index_pairs
-        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-        .for_each(|group| {
-            if group.len() == 1 {
-                return;
-            }
-            let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
-            convergent_indices.push(indices);
-        });
+        let mut convergent_indices = Vec::new();
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .for_each(|group| {
+                if group.len() == 1 {
+                    return;
+                }
+                let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
+                convergent_indices.push(indices);
+            });
 
-    mem::drop(variant_index_pairs);
+        convergent_indices
+    };
 
     let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
@@ -298,76 +302,79 @@ pub fn get_candidates_cross(
         ));
     }
 
-    let num_del_variants_q = get_num_deletion_variants(query, max_distance);
-    let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
+    let convergent_indices = {
+        let num_del_variants_q = get_num_deletion_variants(query, max_distance);
+        let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
 
-    let total_capacity =
-        num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
-    let mut variant_index_pairs = Vec::with_capacity(total_capacity);
-    unsafe { variant_index_pairs.set_len(total_capacity) };
+        let total_capacity =
+            num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
+        let mut variant_index_pairs = Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs.set_len(total_capacity) };
 
-    let mut vip_chunks_q: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
-        Vec::with_capacity(query.len());
-    let mut remaining = &mut variant_index_pairs[..];
-    for n in num_del_variants_q {
-        let (chunk, rest) = remaining.split_at_mut(n);
-        vip_chunks_q.push(chunk);
-        remaining = rest;
-    }
+        let mut vip_chunks_q: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
+            Vec::with_capacity(query.len());
+        let mut remaining = &mut variant_index_pairs[..];
+        for n in num_del_variants_q {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks_q.push(chunk);
+            remaining = rest;
+        }
 
-    let mut vip_chunks_r: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
-        Vec::with_capacity(query.len());
-    for n in num_del_variants_r {
-        let (chunk, rest) = remaining.split_at_mut(n);
-        vip_chunks_r.push(chunk);
-        remaining = rest;
-    }
+        let mut vip_chunks_r: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
+            Vec::with_capacity(query.len());
+        for n in num_del_variants_r {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks_r.push(chunk);
+            remaining = rest;
+        }
 
-    query
-        .par_iter()
-        .enumerate()
-        .zip(vip_chunks_q.into_par_iter())
-        .with_min_len(100000)
-        .for_each(|((idx, s), chunk)| {
-            write_deletion_variants_cci(s, idx, max_distance, false, chunk);
-        });
-    reference
-        .par_iter()
-        .enumerate()
-        .zip(vip_chunks_r.into_par_iter())
-        .with_min_len(100000)
-        .for_each(|((idx, s), chunk)| {
-            write_deletion_variants_cci(s, idx, max_distance, true, chunk);
-        });
-
-    variant_index_pairs.par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
-    variant_index_pairs.dedup();
-
-    let mut convergent_indices = Vec::new();
-    variant_index_pairs
-        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-        .for_each(|group| {
-            if group.len() == 1 {
-                return;
-            }
-
-            let mut indices_query = Vec::new();
-            let mut indices_reference = Vec::new();
-
-            group.iter().for_each(|&(_, idx)| match idx {
-                CrossComparisonIndex::Query(v) => indices_query.push(v),
-                CrossComparisonIndex::Reference(v) => indices_reference.push(v),
+        query
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks_q.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_cci(s, idx, max_distance, false, chunk);
+            });
+        reference
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks_r.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_cci(s, idx, max_distance, true, chunk);
             });
 
-            let num_index_pairs = indices_query.len() * indices_reference.len();
-            if num_index_pairs == 0 {
-                return;
-            }
+        variant_index_pairs
+            .par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
+        variant_index_pairs.dedup();
 
-            convergent_indices.push((indices_query, indices_reference));
-        });
+        let mut convergent_indices = Vec::new();
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .for_each(|group| {
+                if group.len() == 1 {
+                    return;
+                }
 
-    mem::drop(variant_index_pairs);
+                let mut indices_query = Vec::new();
+                let mut indices_reference = Vec::new();
+
+                group.iter().for_each(|&(_, idx)| match idx {
+                    CrossComparisonIndex::Query(v) => indices_query.push(v),
+                    CrossComparisonIndex::Reference(v) => indices_reference.push(v),
+                });
+
+                let num_index_pairs = indices_query.len() * indices_reference.len();
+                if num_index_pairs == 0 {
+                    return;
+                }
+
+                convergent_indices.push((indices_query, indices_reference));
+            });
+
+        convergent_indices
+    };
 
     let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
