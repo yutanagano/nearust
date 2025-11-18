@@ -11,7 +11,7 @@ use std::{io, mem, u8};
 
 mod pymod;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum CrossComparisonIndex {
     Query(usize),
     Reference(usize),
@@ -154,25 +154,31 @@ impl CachedSymdel {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
 
-        let num_vi_pairs = get_num_vi_pairs(query, max_distance);
-        let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
-        let (tx, rx) = mpsc::channel();
-        query
-            .par_iter()
-            .with_min_len(100000)
-            .enumerate()
-            .for_each_with(tx, |transmitter, (idx, s)| {
-                let variants = get_deletion_variants(s, max_distance);
-                transmitter.send((idx, variants)).unwrap();
-            });
+        let num_del_variants = get_num_deletion_variants(query, max_distance);
 
-        for (idx, mut variants) in rx {
-            for variant in variants.drain(..) {
-                variant_index_pairs.push((variant, idx));
-            }
+        let total_capacity = num_del_variants.iter().sum();
+        let mut variant_index_pairs = Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs.set_len(total_capacity) };
+
+        let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
+        let mut remaining = &mut variant_index_pairs[..];
+        for n in num_del_variants {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks.push(chunk);
+            remaining = rest;
         }
 
+        query
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_rawidx(s, idx, max_distance, chunk);
+            });
+
         variant_index_pairs.par_sort_unstable();
+        variant_index_pairs.dedup();
 
         let mut convergent_indices = Vec::new();
         let mut total_num_index_pairs = 0;
@@ -322,25 +328,31 @@ pub fn get_candidates_within(
         ));
     }
 
-    let num_vi_pairs = get_num_vi_pairs(query, max_distance);
-    let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
-    let (tx, rx) = mpsc::channel();
-    query
-        .par_iter()
-        .with_min_len(100000)
-        .enumerate()
-        .for_each_with(tx, |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_distance);
-            transmitter.send((idx, variants)).unwrap();
-        });
+    let num_del_variants = get_num_deletion_variants(query, max_distance);
 
-    for (idx, mut variants) in rx {
-        for variant in variants.drain(..) {
-            variant_index_pairs.push((variant, idx));
-        }
+    let total_capacity = num_del_variants.iter().sum();
+    let mut variant_index_pairs = Vec::with_capacity(total_capacity);
+    unsafe { variant_index_pairs.set_len(total_capacity) };
+
+    let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
+    let mut remaining = &mut variant_index_pairs[..];
+    for n in num_del_variants {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        vip_chunks.push(chunk);
+        remaining = rest;
     }
 
+    query
+        .par_iter()
+        .enumerate()
+        .zip(vip_chunks.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|((idx, s), chunk)| {
+            write_deletion_variants_rawidx(s, idx, max_distance, chunk);
+        });
+
     variant_index_pairs.par_sort_unstable();
+    variant_index_pairs.dedup();
 
     let mut convergent_indices = Vec::new();
     variant_index_pairs
@@ -394,38 +406,50 @@ pub fn get_candidates_cross(
         ));
     }
 
-    let num_vi_query = get_num_vi_pairs(query, max_distance);
-    let num_vi_reference = get_num_vi_pairs(reference, max_distance);
-    let mut variant_index_pairs = Vec::with_capacity(num_vi_query + num_vi_reference);
-    let (tx, rx) = mpsc::channel();
+    let num_del_variants_q = get_num_deletion_variants(query, max_distance);
+    let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
+
+    let total_capacity =
+        num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
+    let mut variant_index_pairs = Vec::with_capacity(total_capacity);
+    unsafe { variant_index_pairs.set_len(total_capacity) };
+
+    let mut vip_chunks_q: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
+        Vec::with_capacity(query.len());
+    let mut remaining = &mut variant_index_pairs[..];
+    for n in num_del_variants_q {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        vip_chunks_q.push(chunk);
+        remaining = rest;
+    }
+
+    let mut vip_chunks_r: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
+        Vec::with_capacity(query.len());
+    for n in num_del_variants_r {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        vip_chunks_r.push(chunk);
+        remaining = rest;
+    }
+
     query
         .par_iter()
-        .with_min_len(100000)
         .enumerate()
-        .for_each_with(tx.clone(), |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_distance);
-            transmitter
-                .send((CrossComparisonIndex::Query(idx), variants))
-                .unwrap();
+        .zip(vip_chunks_q.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|((idx, s), chunk)| {
+            write_deletion_variants_cci(s, idx, max_distance, false, chunk);
         });
     reference
         .par_iter()
-        .with_min_len(100000)
         .enumerate()
-        .for_each_with(tx, |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_distance);
-            transmitter
-                .send((CrossComparisonIndex::Reference(idx), variants))
-                .unwrap();
+        .zip(vip_chunks_r.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|((idx, s), chunk)| {
+            write_deletion_variants_cci(s, idx, max_distance, true, chunk);
         });
 
-    for (idx, mut variants) in rx {
-        for variant in variants.drain(..) {
-            variant_index_pairs.push((variant, idx));
-        }
-    }
-
     variant_index_pairs.par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
+    variant_index_pairs.dedup();
 
     let mut convergent_indices = Vec::new();
     let mut total_num_index_pairs = 0;
@@ -480,20 +504,20 @@ pub fn get_candidates_cross(
     Ok(hit_candidates)
 }
 
-fn get_num_vi_pairs(strings: &[String], max_distance: u8) -> usize {
+fn get_num_deletion_variants(strings: &[String], max_distance: u8) -> Vec<usize> {
     strings
         .iter()
         .map(|s| {
-            let mut num_vi_pairs = 0;
+            let mut num_vars = 0;
             for k in 0..=max_distance {
                 if k as usize > s.len() {
                     break;
                 }
-                num_vi_pairs += get_num_k_combs(s.len(), k);
+                num_vars += get_num_k_combs(s.len(), k);
             }
-            num_vi_pairs
+            num_vars
         })
-        .sum()
+        .collect_vec()
 }
 
 fn get_num_k_combs(n: usize, k: u8) -> usize {
@@ -518,6 +542,83 @@ where
         .iter()
         .map(|indices| get_num_k_combs(indices.as_ref().len(), 2))
         .sum()
+}
+
+/// Given an input string and its index in the original input vector, generate all possible strings
+/// after making at most max_deletions single-character deletions and write them into the slots in
+/// the provided chunk, as 2-tuples (variant, input_idx).
+fn write_deletion_variants_rawidx(
+    input: &str,
+    input_idx: usize,
+    max_deletions: u8,
+    chunk: &mut [(Box<str>, usize)],
+) {
+    let input_length = input.len();
+
+    chunk[0] = (input.into(), input_idx);
+
+    let mut variant_idx = 1;
+    for num_deletions in 1..=max_deletions {
+        if num_deletions as usize > input_length {
+            break;
+        }
+
+        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
+            let mut variant = String::with_capacity(input_length - num_deletions as usize);
+            let mut offset = 0;
+
+            for idx in deletion_indices {
+                variant.push_str(&input[offset..idx]);
+                offset = idx + 1;
+            }
+            variant.push_str(&input[offset..input_length]);
+
+            chunk[variant_idx] = (variant.into(), input_idx);
+            variant_idx += 1;
+        }
+    }
+}
+
+/// Similar to write_deletion_variants_rawidx but with the indices wrapped in CrossComparisonIndex.
+fn write_deletion_variants_cci(
+    input: &str,
+    input_idx: usize,
+    max_deletions: u8,
+    is_ref: bool,
+    chunk: &mut [(Box<str>, CrossComparisonIndex)],
+) {
+    let input_length = input.len();
+
+    chunk[0] = if is_ref {
+        (input.into(), CrossComparisonIndex::Reference(input_idx))
+    } else {
+        (input.into(), CrossComparisonIndex::Query(input_idx))
+    };
+
+    let mut variant_idx = 1;
+    for num_deletions in 1..=max_deletions {
+        if num_deletions as usize > input_length {
+            break;
+        }
+
+        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
+            let mut variant = String::with_capacity(input_length - num_deletions as usize);
+            let mut offset = 0;
+
+            for idx in deletion_indices {
+                variant.push_str(&input[offset..idx]);
+                offset = idx + 1;
+            }
+            variant.push_str(&input[offset..input_length]);
+
+            chunk[variant_idx] = if is_ref {
+                (variant.into(), CrossComparisonIndex::Reference(input_idx))
+            } else {
+                (variant.into(), CrossComparisonIndex::Query(input_idx))
+            };
+            variant_idx += 1;
+        }
+    }
 }
 
 /// Given an input string, generate all possible strings after making at most max_deletions
@@ -684,8 +785,8 @@ mod tests {
     #[test]
     fn test_get_num_vi_pairs() {
         let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
-        let result = get_num_vi_pairs(&strings, 1);
-        assert_eq!(result, 12);
+        let result = get_num_deletion_variants(&strings, 1);
+        assert_eq!(result, vec![4, 4, 4]);
     }
 
     #[test]
