@@ -6,6 +6,7 @@ use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use std::hash::Hash;
 use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
+use std::mem::MaybeUninit;
 use std::sync::mpsc;
 use std::{u8, usize};
 
@@ -127,11 +128,13 @@ impl CachedSymdel {
             let num_del_variants = get_num_deletion_variants(query, max_distance);
 
             let total_capacity = num_del_variants.iter().sum();
-            let mut variant_index_pairs = Vec::with_capacity(total_capacity);
-            unsafe { variant_index_pairs.set_len(total_capacity) };
+            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(Box<str>, usize)>> =
+                Vec::with_capacity(total_capacity);
+            unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-            let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
-            let mut remaining = &mut variant_index_pairs[..];
+            let mut vip_chunks: Vec<&mut [MaybeUninit<(Box<str>, usize)>]> =
+                Vec::with_capacity(query.len());
+            let mut remaining = &mut variant_index_pairs_uninit[..];
             for n in num_del_variants {
                 let (chunk, rest) = remaining.split_at_mut(n);
                 vip_chunks.push(chunk);
@@ -146,6 +149,14 @@ impl CachedSymdel {
                 .for_each(|((idx, s), chunk)| {
                     write_deletion_variants_rawidx(s, idx, max_distance, chunk);
                 });
+
+            let mut variant_index_pairs = unsafe {
+                let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (Box<str>, usize);
+                let len = variant_index_pairs_uninit.len();
+                let cap = variant_index_pairs_uninit.capacity();
+                std::mem::forget(variant_index_pairs_uninit);
+                Vec::from_raw_parts(ptr, len, cap)
+            };
 
             variant_index_pairs.par_sort_unstable();
             variant_index_pairs.dedup();
@@ -244,11 +255,13 @@ pub fn get_candidates_within(
         let num_del_variants = get_num_deletion_variants(query, max_distance);
 
         let total_capacity = num_del_variants.iter().sum();
-        let mut variant_index_pairs = Vec::with_capacity(total_capacity);
-        unsafe { variant_index_pairs.set_len(total_capacity) };
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(Box<str>, usize)>> =
+            Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-        let mut vip_chunks: Vec<&mut [(Box<str>, usize)]> = Vec::with_capacity(query.len());
-        let mut remaining = &mut variant_index_pairs[..];
+        let mut vip_chunks: Vec<&mut [MaybeUninit<(Box<str>, usize)>]> =
+            Vec::with_capacity(query.len());
+        let mut remaining = &mut variant_index_pairs_uninit[..];
         for n in num_del_variants {
             let (chunk, rest) = remaining.split_at_mut(n);
             vip_chunks.push(chunk);
@@ -263,6 +276,14 @@ pub fn get_candidates_within(
             .for_each(|((idx, s), chunk)| {
                 write_deletion_variants_rawidx(s, idx, max_distance, chunk);
             });
+
+        let mut variant_index_pairs = unsafe {
+            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (Box<str>, usize);
+            let len = variant_index_pairs_uninit.len();
+            let cap = variant_index_pairs_uninit.capacity();
+            std::mem::forget(variant_index_pairs_uninit);
+            Vec::from_raw_parts(ptr, len, cap)
+        };
 
         variant_index_pairs.par_sort_unstable();
         variant_index_pairs.dedup();
@@ -308,19 +329,20 @@ pub fn get_candidates_cross(
 
         let total_capacity =
             num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
-        let mut variant_index_pairs = Vec::with_capacity(total_capacity);
-        unsafe { variant_index_pairs.set_len(total_capacity) };
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(Box<str>, CrossComparisonIndex)>> =
+            Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-        let mut vip_chunks_q: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
+        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(Box<str>, CrossComparisonIndex)>]> =
             Vec::with_capacity(query.len());
-        let mut remaining = &mut variant_index_pairs[..];
+        let mut remaining = &mut variant_index_pairs_uninit[..];
         for n in num_del_variants_q {
             let (chunk, rest) = remaining.split_at_mut(n);
             vip_chunks_q.push(chunk);
             remaining = rest;
         }
 
-        let mut vip_chunks_r: Vec<&mut [(Box<str>, CrossComparisonIndex)]> =
+        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(Box<str>, CrossComparisonIndex)>]> =
             Vec::with_capacity(query.len());
         for n in num_del_variants_r {
             let (chunk, rest) = remaining.split_at_mut(n);
@@ -344,6 +366,15 @@ pub fn get_candidates_cross(
             .for_each(|((idx, s), chunk)| {
                 write_deletion_variants_cci(s, idx, max_distance, true, chunk);
             });
+
+        let mut variant_index_pairs = unsafe {
+            let ptr =
+                variant_index_pairs_uninit.as_mut_ptr() as *mut (Box<str>, CrossComparisonIndex);
+            let len = variant_index_pairs_uninit.len();
+            let cap = variant_index_pairs_uninit.capacity();
+            std::mem::forget(variant_index_pairs_uninit);
+            Vec::from_raw_parts(ptr, len, cap)
+        };
 
         variant_index_pairs
             .par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
@@ -418,11 +449,11 @@ fn write_deletion_variants_rawidx(
     input: &str,
     input_idx: usize,
     max_deletions: u8,
-    chunk: &mut [(Box<str>, usize)],
+    chunk: &mut [MaybeUninit<(Box<str>, usize)>],
 ) {
     let input_length = input.len();
 
-    chunk[0] = (input.into(), input_idx);
+    chunk[0].write((input.into(), input_idx));
 
     let mut variant_idx = 1;
     for num_deletions in 1..=max_deletions {
@@ -440,7 +471,7 @@ fn write_deletion_variants_rawidx(
             }
             variant.push_str(&input[offset..input_length]);
 
-            chunk[variant_idx] = (variant.into(), input_idx);
+            chunk[variant_idx].write((variant.into(), input_idx));
             variant_idx += 1;
         }
     }
@@ -452,15 +483,15 @@ fn write_deletion_variants_cci(
     input_idx: usize,
     max_deletions: u8,
     is_ref: bool,
-    chunk: &mut [(Box<str>, CrossComparisonIndex)],
+    chunk: &mut [MaybeUninit<(Box<str>, CrossComparisonIndex)>],
 ) {
     let input_length = input.len();
 
-    chunk[0] = if is_ref {
+    chunk[0].write(if is_ref {
         (input.into(), CrossComparisonIndex::Reference(input_idx))
     } else {
         (input.into(), CrossComparisonIndex::Query(input_idx))
-    };
+    });
 
     let mut variant_idx = 1;
     for num_deletions in 1..=max_deletions {
@@ -478,11 +509,11 @@ fn write_deletion_variants_cci(
             }
             variant.push_str(&input[offset..input_length]);
 
-            chunk[variant_idx] = if is_ref {
+            chunk[variant_idx].write(if is_ref {
                 (variant.into(), CrossComparisonIndex::Reference(input_idx))
             } else {
                 (variant.into(), CrossComparisonIndex::Query(input_idx))
-            };
+            });
             variant_idx += 1;
         }
     }
@@ -532,11 +563,13 @@ where
         .collect_vec();
 
     let total_capacity = num_hit_candidates.iter().sum();
-    let mut hit_candidates = Vec::with_capacity(total_capacity);
-    unsafe { hit_candidates.set_len(total_capacity) };
+    let mut hit_candidates_uninit: Vec<MaybeUninit<(usize, usize)>> =
+        Vec::with_capacity(total_capacity);
+    unsafe { hit_candidates_uninit.set_len(total_capacity) };
 
-    let mut hc_chunks: Vec<&mut [(usize, usize)]> = Vec::with_capacity(convergent_indices.len());
-    let mut remaining = &mut hit_candidates[..];
+    let mut hc_chunks: Vec<&mut [MaybeUninit<(usize, usize)>]> =
+        Vec::with_capacity(convergent_indices.len());
+    let mut remaining = &mut hit_candidates_uninit[..];
     for n in num_hit_candidates {
         let (chunk, rest) = remaining.split_at_mut(n);
         hc_chunks.push(chunk);
@@ -555,9 +588,17 @@ where
                 .tuple_combinations()
                 .enumerate()
             {
-                chunk[i] = candidate;
+                chunk[i].write(candidate);
             }
         });
+
+    let mut hit_candidates = unsafe {
+        let ptr = hit_candidates_uninit.as_mut_ptr() as *mut (usize, usize);
+        let len = hit_candidates_uninit.len();
+        let cap = hit_candidates_uninit.capacity();
+        std::mem::forget(hit_candidates_uninit);
+        Vec::from_raw_parts(ptr, len, cap)
+    };
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
@@ -577,11 +618,13 @@ where
         .collect_vec();
 
     let total_capacity = num_hit_candidates.iter().sum();
-    let mut hit_candidates = Vec::with_capacity(total_capacity);
-    unsafe { hit_candidates.set_len(total_capacity) };
+    let mut hit_candidates_uninit: Vec<MaybeUninit<(usize, usize)>> =
+        Vec::with_capacity(total_capacity);
+    unsafe { hit_candidates_uninit.set_len(total_capacity) };
 
-    let mut hc_chunks: Vec<&mut [(usize, usize)]> = Vec::with_capacity(convergent_indices.len());
-    let mut remaining = &mut hit_candidates[..];
+    let mut hc_chunks: Vec<&mut [MaybeUninit<(usize, usize)>]> =
+        Vec::with_capacity(convergent_indices.len());
+    let mut remaining = &mut hit_candidates_uninit[..];
     for n in num_hit_candidates {
         let (chunk, rest) = remaining.split_at_mut(n);
         hc_chunks.push(chunk);
@@ -600,9 +643,17 @@ where
                 .cartesian_product(indices_r.as_ref().iter().map(|&v| v))
                 .enumerate()
             {
-                chunk[i] = candidate;
+                chunk[i].write(candidate);
             }
         });
+
+    let mut hit_candidates = unsafe {
+        let ptr = hit_candidates_uninit.as_mut_ptr() as *mut (usize, usize);
+        let len = hit_candidates_uninit.len();
+        let cap = hit_candidates_uninit.capacity();
+        std::mem::forget(hit_candidates_uninit);
+        Vec::from_raw_parts(ptr, len, cap)
+    };
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
