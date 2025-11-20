@@ -1,10 +1,10 @@
-use core::hash::{BuildHasher, Hasher};
+use foldhash::fast::FixedState;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
 use std::mem::MaybeUninit;
 use std::sync::mpsc;
@@ -18,13 +18,41 @@ enum CrossComparisonIndex {
     Reference(usize),
 }
 
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        unreachable!("hasher only designed for u64, got {bytes:?}");
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Default)]
+struct IdentityHasherBuilder;
+
+impl BuildHasher for IdentityHasherBuilder {
+    type Hasher = IdentityHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        IdentityHasher::default()
+    }
+}
+
 /// Class for assymetric cross-set symdel where the reference is known beforehand, and a variant
 /// hashmap (mapping deletion variants to all the original strings that could have produced that
 /// variant) can be computed beforehand to expedite multiple future queries against that same
 /// reference.
 pub struct CachedSymdel {
     reference: Vec<String>,
-    variant_map: HashMap<Box<str>, Vec<usize>>,
+    variant_map: HashMap<u64, Vec<usize>, IdentityHasherBuilder>,
     max_distance: u8,
 }
 
@@ -41,8 +69,9 @@ impl CachedSymdel {
             ));
         }
 
-        let mut variant_map = HashMap::new();
-        let hash_builder = variant_map.hasher();
+        let hash_builder = FixedState::with_seed(42);
+        let id_builder = IdentityHasherBuilder::default();
+        let mut variant_map = HashMap::with_hasher(id_builder);
         let (tx, rx) = mpsc::channel();
 
         reference
@@ -50,25 +79,15 @@ impl CachedSymdel {
             .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
-                let variants_and_hashes = get_deletion_variants(s, max_distance)
-                    .into_iter()
-                    .map(|v| {
-                        let mut state = hash_builder.build_hasher();
-                        v.hash(&mut state);
-                        (v, state.finish())
-                    })
-                    .collect_vec();
-                transmitter.send((idx, variants_and_hashes)).unwrap();
+                let hashed_variants = get_deletion_variants(s, max_distance, &hash_builder);
+                transmitter.send((idx, hashed_variants)).unwrap();
             });
 
-        for (idx, variants_and_hashes) in rx {
-            for (variant, precomputed_hash) in variants_and_hashes.into_iter() {
-                match variant_map
-                    .raw_entry_mut()
-                    .from_key_hashed_nocheck(precomputed_hash, &variant)
-                {
+        for (idx, hashed_variants) in rx {
+            for h in hashed_variants.into_iter() {
+                match variant_map.raw_entry_mut().from_key_hashed_nocheck(h, &h) {
                     RawEntryMut::Vacant(view) => {
-                        view.insert_hashed_nocheck(precomputed_hash, variant, vec![idx]);
+                        view.insert_hashed_nocheck(h, h, vec![idx]);
                     }
                     RawEntryMut::Occupied(mut view) => {
                         let v = view.get_mut();
@@ -128,11 +147,11 @@ impl CachedSymdel {
             let num_del_variants = get_num_deletion_variants(query, max_distance);
 
             let total_capacity = num_del_variants.iter().sum();
-            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(Box<str>, usize)>> =
+            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
                 Vec::with_capacity(total_capacity);
             unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-            let mut vip_chunks: Vec<&mut [MaybeUninit<(Box<str>, usize)>]> =
+            let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> =
                 Vec::with_capacity(query.len());
             let mut remaining = &mut variant_index_pairs_uninit[..];
             for n in num_del_variants {
@@ -141,17 +160,19 @@ impl CachedSymdel {
                 remaining = rest;
             }
 
+            let hash_builder = FixedState::with_seed(42);
+
             query
                 .par_iter()
                 .enumerate()
                 .zip(vip_chunks.into_par_iter())
                 .with_min_len(100000)
                 .for_each(|((idx, s), chunk)| {
-                    write_deletion_variants_rawidx(s, idx, max_distance, chunk);
+                    write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
                 });
 
             let mut variant_index_pairs = unsafe {
-                let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (Box<str>, usize);
+                let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, usize);
                 let len = variant_index_pairs_uninit.len();
                 let cap = variant_index_pairs_uninit.capacity();
                 std::mem::forget(variant_index_pairs_uninit);
@@ -255,12 +276,11 @@ pub fn get_candidates_within(
         let num_del_variants = get_num_deletion_variants(query, max_distance);
 
         let total_capacity = num_del_variants.iter().sum();
-        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(Box<str>, usize)>> =
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
             Vec::with_capacity(total_capacity);
         unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-        let mut vip_chunks: Vec<&mut [MaybeUninit<(Box<str>, usize)>]> =
-            Vec::with_capacity(query.len());
+        let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> = Vec::with_capacity(query.len());
         let mut remaining = &mut variant_index_pairs_uninit[..];
         for n in num_del_variants {
             let (chunk, rest) = remaining.split_at_mut(n);
@@ -268,17 +288,19 @@ pub fn get_candidates_within(
             remaining = rest;
         }
 
+        let hash_builder = FixedState::with_seed(42);
+
         query
             .par_iter()
             .enumerate()
             .zip(vip_chunks.into_par_iter())
             .with_min_len(100000)
             .for_each(|((idx, s), chunk)| {
-                write_deletion_variants_rawidx(s, idx, max_distance, chunk);
+                write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs = unsafe {
-            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (Box<str>, usize);
+            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, usize);
             let len = variant_index_pairs_uninit.len();
             let cap = variant_index_pairs_uninit.capacity();
             std::mem::forget(variant_index_pairs_uninit);
@@ -443,17 +465,18 @@ fn get_num_k_combs(n: usize, k: u8) -> usize {
 }
 
 /// Given an input string and its index in the original input vector, generate all possible strings
-/// after making at most max_deletions single-character deletions and write them into the slots in
-/// the provided chunk, as 2-tuples (variant, input_idx).
+/// after making at most max_deletions single-character deletions, compute their hash, and write
+/// them into the slots in the provided chunk, as 2-tuples (hash, input_idx).
 fn write_deletion_variants_rawidx(
     input: &str,
     input_idx: usize,
     max_deletions: u8,
-    chunk: &mut [MaybeUninit<(Box<str>, usize)>],
+    chunk: &mut [MaybeUninit<(u64, usize)>],
+    hash_builder: &impl BuildHasher,
 ) {
     let input_length = input.len();
 
-    chunk[0].write((input.into(), input_idx));
+    chunk[0].write((hash_string(input, hash_builder), input_idx));
 
     let mut variant_idx = 1;
     for num_deletions in 1..=max_deletions {
@@ -471,7 +494,7 @@ fn write_deletion_variants_rawidx(
             }
             variant.push_str(&input[offset..input_length]);
 
-            chunk[variant_idx].write((variant.into(), input_idx));
+            chunk[variant_idx].write((hash_string(variant, hash_builder), input_idx));
             variant_idx += 1;
         }
     }
@@ -521,15 +544,19 @@ fn write_deletion_variants_cci(
 
 /// Similar to the write_deletion_variants functions but instead of writing to slots in a slice,
 /// returns a vector containing the variants.
-fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
+fn get_deletion_variants(
+    input: &str,
+    max_deletions: u8,
+    hash_builder: &impl BuildHasher,
+) -> Vec<u64> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
-    deletion_variants.push(input.to_string().into_boxed_str());
+    deletion_variants.push(hash_string(input, hash_builder));
 
     for num_deletions in 1..=max_deletions {
         if num_deletions as usize > input_length {
-            deletion_variants.push("".to_string().into_boxed_str());
+            deletion_variants.push(hash_string("", hash_builder));
             break;
         }
 
@@ -543,7 +570,7 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
             }
             variant.push_str(&input[offset..input_length]);
 
-            deletion_variants.push(variant.into_boxed_str());
+            deletion_variants.push(hash_string(variant, hash_builder));
         }
     }
 
@@ -551,6 +578,12 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
     deletion_variants.dedup();
 
     deletion_variants
+}
+
+fn hash_string(s: impl AsRef<[u8]>, hash_builder: &impl BuildHasher) -> u64 {
+    let mut hasher = hash_builder.build_hasher();
+    hasher.write(s.as_ref());
+    hasher.finish()
 }
 
 fn get_hit_candidates_from_cis_within<T>(convergent_indices: &[T]) -> Vec<(usize, usize)>
@@ -797,29 +830,38 @@ mod tests {
 
     #[test]
     fn test_get_deletion_variants() {
-        let variants = get_deletion_variants("foo", 1);
-        let expected = vec!["fo".into(), "foo".into(), "oo".into()];
+        let hash_builder = FixedState::with_seed(42);
+
+        let variants = get_deletion_variants("foo", 1, &hash_builder);
+        let mut expected = vec![
+            hash_string("fo", &hash_builder),
+            hash_string("foo", &hash_builder),
+            hash_string("oo", &hash_builder),
+        ];
+        expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants("foo", 2);
-        let expected = vec![
-            "f".into(),
-            "fo".into(),
-            "foo".into(),
-            "o".into(),
-            "oo".into(),
+        let variants = get_deletion_variants("foo", 2, &hash_builder);
+        let mut expected = vec![
+            hash_string("f", &hash_builder),
+            hash_string("fo", &hash_builder),
+            hash_string("foo", &hash_builder),
+            hash_string("o", &hash_builder),
+            hash_string("oo", &hash_builder),
         ];
+        expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants("foo", 10);
-        let expected = vec![
-            "".into(),
-            "f".into(),
-            "fo".into(),
-            "foo".into(),
-            "o".into(),
-            "oo".into(),
+        let variants = get_deletion_variants("foo", 10, &hash_builder);
+        let mut expected = vec![
+            hash_string("", &hash_builder),
+            hash_string("f", &hash_builder),
+            hash_string("fo", &hash_builder),
+            hash_string("foo", &hash_builder),
+            hash_string("o", &hash_builder),
+            hash_string("oo", &hash_builder),
         ];
+        expected.sort_unstable();
         assert_eq!(variants, expected);
     }
 
