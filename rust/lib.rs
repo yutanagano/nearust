@@ -1,20 +1,49 @@
-use core::hash::{BuildHasher, Hasher};
+use foldhash::fast::FixedState;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
-use std::io::{BufRead, Error, ErrorKind::InvalidData, Write};
-use std::usize;
-use std::{hash::Hash, sync::mpsc};
-use std::{io, mem, u8};
+use std::hash::{BuildHasher, Hasher};
+use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
+use std::mem::MaybeUninit;
+use std::sync::mpsc;
+use std::{u8, usize};
 
 mod pymod;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum CrossComparisonIndex {
     Query(usize),
     Reference(usize),
+}
+
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        unreachable!("hasher only designed for u64, got {bytes:?}");
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Default)]
+struct IdentityHasherBuilder;
+
+impl BuildHasher for IdentityHasherBuilder {
+    type Hasher = IdentityHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        IdentityHasher::default()
+    }
 }
 
 /// Class for assymetric cross-set symdel where the reference is known beforehand, and a variant
@@ -23,7 +52,7 @@ enum CrossComparisonIndex {
 /// reference.
 pub struct CachedSymdel {
     reference: Vec<String>,
-    variant_map: HashMap<Box<str>, Vec<usize>>,
+    variant_map: HashMap<u64, Vec<usize>, IdentityHasherBuilder>,
     max_distance: u8,
 }
 
@@ -40,8 +69,9 @@ impl CachedSymdel {
             ));
         }
 
-        let mut variant_map = HashMap::new();
-        let hash_builder = variant_map.hasher();
+        let hash_builder = FixedState::with_seed(42);
+        let id_builder = IdentityHasherBuilder::default();
+        let mut variant_map = HashMap::with_hasher(id_builder);
         let (tx, rx) = mpsc::channel();
 
         reference
@@ -49,25 +79,15 @@ impl CachedSymdel {
             .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
-                let variants_and_hashes = get_deletion_variants(s, max_distance)
-                    .into_iter()
-                    .map(|v| {
-                        let mut state = hash_builder.build_hasher();
-                        v.hash(&mut state);
-                        (v, state.finish())
-                    })
-                    .collect_vec();
-                transmitter.send((idx, variants_and_hashes)).unwrap();
+                let hashed_variants = get_deletion_variants(s, max_distance, &hash_builder);
+                transmitter.send((idx, hashed_variants)).unwrap();
             });
 
-        for (idx, variants_and_hashes) in rx {
-            for (variant, precomputed_hash) in variants_and_hashes.into_iter() {
-                match variant_map
-                    .raw_entry_mut()
-                    .from_key_hashed_nocheck(precomputed_hash, &variant)
-                {
+        for (idx, hashed_variants) in rx {
+            for h in hashed_variants.into_iter() {
+                match variant_map.raw_entry_mut().from_key_hashed_nocheck(h, &h) {
                     RawEntryMut::Vacant(view) => {
-                        view.insert_hashed_nocheck(precomputed_hash, variant, vec![idx]);
+                        view.insert_hashed_nocheck(h, h, vec![idx]);
                     }
                     RawEntryMut::Occupied(mut view) => {
                         let v = view.get_mut();
@@ -95,45 +115,14 @@ impl CachedSymdel {
         }
 
         let mut convergent_indices = Vec::new();
-        let (tx, rx) = mpsc::channel();
-        self.variant_map
-            .par_iter()
-            .for_each_with(tx, |transmitter, (_, indices)| {
-                if indices.len() == 1 {
-                    return;
-                }
-                transmitter.send(indices).unwrap();
-            });
-
-        for indices in rx {
-            convergent_indices.push(indices);
-        }
-
-        let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
-        let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
-        let (tx, rx) = mpsc::channel();
-        convergent_indices
-            .par_iter()
-            .with_min_len(100000)
-            .for_each_with(tx, |transmitter, indices| {
-                let pair_tuples = indices
-                    .iter()
-                    .map(|&v| v)
-                    .tuple_combinations()
-                    .collect_vec();
-                transmitter.send(pair_tuples).unwrap();
-            });
-
-        for pair_tuples in rx {
-            for pair in pair_tuples {
-                hit_candidates.push(pair);
+        self.variant_map.iter().for_each(|(_, indices)| {
+            if indices.len() == 1 {
+                return;
             }
-        }
+            convergent_indices.push(indices);
+        });
 
-        mem::drop(convergent_indices);
-
-        hit_candidates.par_sort_unstable();
-        hit_candidates.dedup();
+        let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
         Ok(get_true_hits(
             hit_candidates,
@@ -154,65 +143,63 @@ impl CachedSymdel {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
         }
 
-        let num_vi_pairs = get_num_vi_pairs(query, max_distance);
-        let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
-        let (tx, rx) = mpsc::channel();
-        query
-            .par_iter()
-            .with_min_len(100000)
-            .enumerate()
-            .for_each_with(tx, |transmitter, (idx, s)| {
-                let variants = get_deletion_variants(s, max_distance);
-                transmitter.send((idx, variants)).unwrap();
-            });
+        let convergent_indices = {
+            let num_del_variants = get_num_deletion_variants(query, max_distance);
 
-        for (idx, mut variants) in rx {
-            for variant in variants.drain(..) {
-                variant_index_pairs.push((variant, idx));
+            let total_capacity = num_del_variants.iter().sum();
+            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
+                Vec::with_capacity(total_capacity);
+            unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
+
+            let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> =
+                Vec::with_capacity(query.len());
+            let mut remaining = &mut variant_index_pairs_uninit[..];
+            for n in num_del_variants {
+                let (chunk, rest) = remaining.split_at_mut(n);
+                vip_chunks.push(chunk);
+                remaining = rest;
             }
-        }
 
-        variant_index_pairs.par_sort_unstable();
+            let hash_builder = FixedState::with_seed(42);
 
-        let mut convergent_indices = Vec::new();
-        let mut total_num_index_pairs = 0;
-        variant_index_pairs
-            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-            .for_each(|group| {
-                let variant = &group[0].0;
-                match self.variant_map.get(variant) {
-                    None => return,
-                    Some(indices_ref) => {
-                        let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                        total_num_index_pairs += indices_query.len() * indices_ref.len();
-                        convergent_indices.push((indices_query, indices_ref));
+            query
+                .par_iter()
+                .enumerate()
+                .zip(vip_chunks.into_par_iter())
+                .with_min_len(100000)
+                .for_each(|((idx, s), chunk)| {
+                    write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                });
+
+            let mut variant_index_pairs = unsafe {
+                let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, usize);
+                let len = variant_index_pairs_uninit.len();
+                let cap = variant_index_pairs_uninit.capacity();
+                std::mem::forget(variant_index_pairs_uninit);
+                Vec::from_raw_parts(ptr, len, cap)
+            };
+
+            variant_index_pairs.par_sort_unstable();
+            variant_index_pairs.dedup();
+
+            let mut convergent_indices = Vec::new();
+            variant_index_pairs
+                .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+                .for_each(|group| {
+                    let variant = &group[0].0;
+                    match self.variant_map.get(variant) {
+                        None => return,
+                        Some(indices_ref) => {
+                            let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
+                            convergent_indices.push((indices_query, indices_ref));
+                        }
                     }
-                }
-            });
+                });
 
-        mem::drop(variant_index_pairs);
+            convergent_indices
+        };
 
-        let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
-        let (tx, rx) = mpsc::channel();
-        convergent_indices
-            .into_par_iter()
-            .with_min_len(100000)
-            .for_each_with(tx, |tx, (indices_query, indices_ref)| {
-                let pair_tuples = indices_query
-                    .into_iter()
-                    .cartesian_product(indices_ref.iter().map(|&v| v))
-                    .collect_vec();
-                tx.send(pair_tuples).unwrap();
-            });
-
-        for pair_tuples in rx {
-            for pair in pair_tuples {
-                hit_candidates.push(pair);
-            }
-        }
-
-        hit_candidates.par_sort_unstable();
-        hit_candidates.dedup();
+        let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
         Ok(get_true_hits(
             hit_candidates,
@@ -238,64 +225,27 @@ impl CachedSymdel {
         }
 
         let mut convergent_indices = Vec::new();
-        let mut total_num_index_pairs = 0;
-        let (tx, rx) = mpsc::channel();
         if query.variant_map.len() < self.variant_map.len() {
-            query.variant_map.par_iter().for_each_with(
-                tx,
-                |transmitter, (variant, indices_query)| match self.variant_map.get(variant) {
+            query.variant_map.iter().for_each(|(variant, indices_q)| {
+                match self.variant_map.get(variant) {
                     None => return,
                     Some(indices_ref) => {
-                        let num_index_pairs = indices_query.len() * indices_ref.len();
-                        transmitter
-                            .send((num_index_pairs, (indices_query, indices_ref)))
-                            .unwrap();
+                        convergent_indices.push((indices_q, indices_ref));
                     }
-                },
-            );
-        } else {
-            self.variant_map
-                .par_iter()
-                .for_each_with(tx, |transmitter, (variant, indices_ref)| {
-                    match query.variant_map.get(variant) {
-                        None => return,
-                        Some(indices_query) => {
-                            let num_index_pairs = indices_query.len() * indices_ref.len();
-                            transmitter
-                                .send((num_index_pairs, (indices_query, indices_ref)))
-                                .unwrap();
-                        }
-                    }
-                });
-        }
-
-        for (num_index_pairs, indices) in rx {
-            total_num_index_pairs += num_index_pairs;
-            convergent_indices.push(indices);
-        }
-
-        let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
-        let (tx, rx) = mpsc::channel();
-        convergent_indices
-            .into_par_iter()
-            .with_min_len(100000)
-            .for_each_with(tx, |tx, (indices_query, indices_ref)| {
-                let pair_tuples = indices_query
-                    .iter()
-                    .map(|&v| v)
-                    .cartesian_product(indices_ref.iter().map(|&v| v))
-                    .collect_vec();
-                tx.send(pair_tuples).unwrap();
+                }
             });
-
-        for pair_tuples in rx {
-            for pair in pair_tuples {
-                hit_candidates.push(pair);
-            }
+        } else {
+            self.variant_map.iter().for_each(|(variant, indices_r)| {
+                match query.variant_map.get(variant) {
+                    None => return,
+                    Some(indices_query) => {
+                        convergent_indices.push((indices_query, indices_r));
+                    }
+                }
+            });
         }
 
-        hit_candidates.par_sort_unstable();
-        hit_candidates.dedup();
+        let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
         Ok(get_true_hits(
             hit_candidates,
@@ -322,58 +272,59 @@ pub fn get_candidates_within(
         ));
     }
 
-    let num_vi_pairs = get_num_vi_pairs(query, max_distance);
-    let mut variant_index_pairs = Vec::with_capacity(num_vi_pairs);
-    let (tx, rx) = mpsc::channel();
-    query
-        .par_iter()
-        .with_min_len(100000)
-        .enumerate()
-        .for_each_with(tx, |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_distance);
-            transmitter.send((idx, variants)).unwrap();
-        });
+    let convergent_indices = {
+        let num_del_variants = get_num_deletion_variants(query, max_distance);
 
-    for (idx, mut variants) in rx {
-        for variant in variants.drain(..) {
-            variant_index_pairs.push((variant, idx));
+        let total_capacity = num_del_variants.iter().sum();
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
+            Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
+
+        let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> = Vec::with_capacity(query.len());
+        let mut remaining = &mut variant_index_pairs_uninit[..];
+        for n in num_del_variants {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks.push(chunk);
+            remaining = rest;
         }
-    }
 
-    variant_index_pairs.par_sort_unstable();
+        let hash_builder = FixedState::with_seed(42);
 
-    let mut convergent_indices = Vec::new();
-    variant_index_pairs
-        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-        .for_each(|group| {
-            if group.len() == 1 {
-                return;
-            }
-            let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
-            convergent_indices.push(indices);
-        });
+        query
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
+            });
 
-    mem::drop(variant_index_pairs);
+        let mut variant_index_pairs = unsafe {
+            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, usize);
+            let len = variant_index_pairs_uninit.len();
+            let cap = variant_index_pairs_uninit.capacity();
+            std::mem::forget(variant_index_pairs_uninit);
+            Vec::from_raw_parts(ptr, len, cap)
+        };
 
-    let num_hit_candidates = get_num_hit_candidates(&convergent_indices);
-    let mut hit_candidates = Vec::with_capacity(num_hit_candidates);
-    let (tx, rx) = mpsc::channel();
-    convergent_indices
-        .into_par_iter()
-        .with_min_len(100000)
-        .for_each_with(tx, |tx, indices| {
-            let pair_tuples = indices.into_iter().tuple_combinations().collect_vec();
-            tx.send(pair_tuples).unwrap();
-        });
+        variant_index_pairs.par_sort_unstable();
+        variant_index_pairs.dedup();
 
-    for pair_tuples in rx {
-        for pair in pair_tuples {
-            hit_candidates.push(pair);
-        }
-    }
+        let mut convergent_indices = Vec::new();
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .for_each(|group| {
+                if group.len() == 1 {
+                    return;
+                }
+                let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
+                convergent_indices.push(indices);
+            });
 
-    hit_candidates.par_sort_unstable();
-    hit_candidates.dedup();
+        convergent_indices
+    };
+
+    let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
     Ok(hit_candidates)
 }
@@ -394,106 +345,110 @@ pub fn get_candidates_cross(
         ));
     }
 
-    let num_vi_query = get_num_vi_pairs(query, max_distance);
-    let num_vi_reference = get_num_vi_pairs(reference, max_distance);
-    let mut variant_index_pairs = Vec::with_capacity(num_vi_query + num_vi_reference);
-    let (tx, rx) = mpsc::channel();
-    query
-        .par_iter()
-        .with_min_len(100000)
-        .enumerate()
-        .for_each_with(tx.clone(), |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_distance);
-            transmitter
-                .send((CrossComparisonIndex::Query(idx), variants))
-                .unwrap();
-        });
-    reference
-        .par_iter()
-        .with_min_len(100000)
-        .enumerate()
-        .for_each_with(tx, |transmitter, (idx, s)| {
-            let variants = get_deletion_variants(s, max_distance);
-            transmitter
-                .send((CrossComparisonIndex::Reference(idx), variants))
-                .unwrap();
-        });
+    let convergent_indices = {
+        let num_del_variants_q = get_num_deletion_variants(query, max_distance);
+        let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
 
-    for (idx, mut variants) in rx {
-        for variant in variants.drain(..) {
-            variant_index_pairs.push((variant, idx));
+        let total_capacity =
+            num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, CrossComparisonIndex)>> =
+            Vec::with_capacity(total_capacity);
+        unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
+
+        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
+            Vec::with_capacity(query.len());
+        let mut remaining = &mut variant_index_pairs_uninit[..];
+        for n in num_del_variants_q {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks_q.push(chunk);
+            remaining = rest;
         }
-    }
 
-    variant_index_pairs.par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
+        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
+            Vec::with_capacity(query.len());
+        for n in num_del_variants_r {
+            let (chunk, rest) = remaining.split_at_mut(n);
+            vip_chunks_r.push(chunk);
+            remaining = rest;
+        }
 
-    let mut convergent_indices = Vec::new();
-    let mut total_num_index_pairs = 0;
-    variant_index_pairs
-        .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-        .for_each(|group| {
-            if group.len() == 1 {
-                return;
-            }
+        let hash_builder = FixedState::with_seed(42);
 
-            let mut indices_query = Vec::new();
-            let mut indices_reference = Vec::new();
-
-            group.iter().for_each(|&(_, idx)| match idx {
-                CrossComparisonIndex::Query(v) => indices_query.push(v),
-                CrossComparisonIndex::Reference(v) => indices_reference.push(v),
+        query
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks_q.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_cci(s, idx, max_distance, false, chunk, &hash_builder);
+            });
+        reference
+            .par_iter()
+            .enumerate()
+            .zip(vip_chunks_r.into_par_iter())
+            .with_min_len(100000)
+            .for_each(|((idx, s), chunk)| {
+                write_deletion_variants_cci(s, idx, max_distance, true, chunk, &hash_builder);
             });
 
-            let num_index_pairs = indices_query.len() * indices_reference.len();
-            if num_index_pairs == 0 {
-                return;
-            }
+        let mut variant_index_pairs = unsafe {
+            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, CrossComparisonIndex);
+            let len = variant_index_pairs_uninit.len();
+            let cap = variant_index_pairs_uninit.capacity();
+            std::mem::forget(variant_index_pairs_uninit);
+            Vec::from_raw_parts(ptr, len, cap)
+        };
 
-            total_num_index_pairs += num_index_pairs;
-            convergent_indices.push((indices_query, indices_reference));
-        });
+        variant_index_pairs
+            .par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
+        variant_index_pairs.dedup();
 
-    mem::drop(variant_index_pairs);
+        let mut convergent_indices = Vec::new();
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .for_each(|group| {
+                if group.len() == 1 {
+                    return;
+                }
 
-    let mut hit_candidates = Vec::with_capacity(total_num_index_pairs);
-    let (tx, rx) = mpsc::channel();
-    convergent_indices
-        .into_par_iter()
-        .with_min_len(100000)
-        .for_each_with(tx, |tx, (indices_query, indices_reference)| {
-            let pair_tuples = indices_query
-                .into_iter()
-                .cartesian_product(indices_reference)
-                .collect_vec();
-            tx.send(pair_tuples).unwrap();
-        });
+                let mut indices_query = Vec::new();
+                let mut indices_reference = Vec::new();
 
-    for pair_tuples in rx {
-        for pair in pair_tuples {
-            hit_candidates.push(pair);
-        }
-    }
+                group.iter().for_each(|&(_, idx)| match idx {
+                    CrossComparisonIndex::Query(v) => indices_query.push(v),
+                    CrossComparisonIndex::Reference(v) => indices_reference.push(v),
+                });
 
-    hit_candidates.par_sort_unstable();
-    hit_candidates.dedup();
+                let num_index_pairs = indices_query.len() * indices_reference.len();
+                if num_index_pairs == 0 {
+                    return;
+                }
+
+                convergent_indices.push((indices_query, indices_reference));
+            });
+
+        convergent_indices
+    };
+
+    let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
     Ok(hit_candidates)
 }
 
-fn get_num_vi_pairs(strings: &[String], max_distance: u8) -> usize {
+fn get_num_deletion_variants(strings: &[String], max_distance: u8) -> Vec<usize> {
     strings
         .iter()
         .map(|s| {
-            let mut num_vi_pairs = 0;
+            let mut num_vars = 0;
             for k in 0..=max_distance {
                 if k as usize > s.len() {
                     break;
                 }
-                num_vi_pairs += get_num_k_combs(s.len(), k);
+                num_vars += get_num_k_combs(s.len(), k);
             }
-            num_vi_pairs
+            num_vars
         })
-        .sum()
+        .collect_vec()
 }
 
 fn get_num_k_combs(n: usize, k: u8) -> usize {
@@ -510,27 +465,112 @@ fn get_num_k_combs(n: usize, k: u8) -> usize {
     return num_subsamples / subsample_perms;
 }
 
-fn get_num_hit_candidates<T>(convergent_indices: &[T]) -> usize
-where
-    T: AsRef<[usize]>,
-{
-    convergent_indices
-        .iter()
-        .map(|indices| get_num_k_combs(indices.as_ref().len(), 2))
-        .sum()
+/// Given an input string and its index in the original input vector, generate all possible strings
+/// after making at most max_deletions single-character deletions, compute their hash, and write
+/// them into the slots in the provided chunk, as 2-tuples (hash, input_idx).
+fn write_deletion_variants_rawidx(
+    input: &str,
+    input_idx: usize,
+    max_deletions: u8,
+    chunk: &mut [MaybeUninit<(u64, usize)>],
+    hash_builder: &impl BuildHasher,
+) {
+    let input_length = input.len();
+
+    chunk[0].write((hash_string(input, hash_builder), input_idx));
+
+    let mut variant_idx = 1;
+    for num_deletions in 1..=max_deletions {
+        if num_deletions as usize > input_length {
+            break;
+        }
+
+        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
+            let mut variant = String::with_capacity(input_length - num_deletions as usize);
+            let mut offset = 0;
+
+            for idx in deletion_indices {
+                variant.push_str(&input[offset..idx]);
+                offset = idx + 1;
+            }
+            variant.push_str(&input[offset..input_length]);
+
+            chunk[variant_idx].write((hash_string(variant, hash_builder), input_idx));
+            variant_idx += 1;
+        }
+    }
 }
 
-/// Given an input string, generate all possible strings after making at most max_deletions
-/// single-character deletions.
-fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
+/// Similar to write_deletion_variants_rawidx but with the indices wrapped in CrossComparisonIndex.
+fn write_deletion_variants_cci(
+    input: &str,
+    input_idx: usize,
+    max_deletions: u8,
+    is_ref: bool,
+    chunk: &mut [MaybeUninit<(u64, CrossComparisonIndex)>],
+    hash_builder: &impl BuildHasher,
+) {
+    let input_length = input.len();
+
+    chunk[0].write(if is_ref {
+        (
+            hash_string(input, hash_builder),
+            CrossComparisonIndex::Reference(input_idx),
+        )
+    } else {
+        (
+            hash_string(input, hash_builder),
+            CrossComparisonIndex::Query(input_idx),
+        )
+    });
+
+    let mut variant_idx = 1;
+    for num_deletions in 1..=max_deletions {
+        if num_deletions as usize > input_length {
+            break;
+        }
+
+        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
+            let mut variant = String::with_capacity(input_length - num_deletions as usize);
+            let mut offset = 0;
+
+            for idx in deletion_indices {
+                variant.push_str(&input[offset..idx]);
+                offset = idx + 1;
+            }
+            variant.push_str(&input[offset..input_length]);
+
+            chunk[variant_idx].write(if is_ref {
+                (
+                    hash_string(variant, hash_builder),
+                    CrossComparisonIndex::Reference(input_idx),
+                )
+            } else {
+                (
+                    hash_string(variant, hash_builder),
+                    CrossComparisonIndex::Query(input_idx),
+                )
+            });
+            variant_idx += 1;
+        }
+    }
+}
+
+/// Similar to the write_deletion_variants functions but instead of writing to slots in a slice,
+/// returns a vector containing the variants.
+fn get_deletion_variants(
+    input: &str,
+    max_deletions: u8,
+    hash_builder: &impl BuildHasher,
+) -> Vec<u64> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
-    deletion_variants.push(input.to_string().into_boxed_str());
+    deletion_variants.push(hash_string(input, hash_builder));
 
     for num_deletions in 1..=max_deletions {
         if num_deletions as usize > input_length {
-            deletion_variants.push("".to_string().into_boxed_str());
+            deletion_variants.push(hash_string("", hash_builder));
             break;
         }
 
@@ -544,7 +584,7 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
             }
             variant.push_str(&input[offset..input_length]);
 
-            deletion_variants.push(variant.into_boxed_str());
+            deletion_variants.push(hash_string(variant, hash_builder));
         }
     }
 
@@ -552,6 +592,120 @@ fn get_deletion_variants(input: &str, max_deletions: u8) -> Vec<Box<str>> {
     deletion_variants.dedup();
 
     deletion_variants
+}
+
+fn hash_string(s: impl AsRef<[u8]>, hash_builder: &impl BuildHasher) -> u64 {
+    let mut hasher = hash_builder.build_hasher();
+    hasher.write(s.as_ref());
+    hasher.finish()
+}
+
+fn get_hit_candidates_from_cis_within<T>(convergent_indices: &[T]) -> Vec<(usize, usize)>
+where
+    T: AsRef<[usize]> + Sync,
+{
+    let num_hit_candidates = convergent_indices
+        .iter()
+        .map(|indices| get_num_k_combs(indices.as_ref().len(), 2))
+        .collect_vec();
+
+    let total_capacity = num_hit_candidates.iter().sum();
+    let mut hit_candidates_uninit: Vec<MaybeUninit<(usize, usize)>> =
+        Vec::with_capacity(total_capacity);
+    unsafe { hit_candidates_uninit.set_len(total_capacity) };
+
+    let mut hc_chunks: Vec<&mut [MaybeUninit<(usize, usize)>]> =
+        Vec::with_capacity(convergent_indices.len());
+    let mut remaining = &mut hit_candidates_uninit[..];
+    for n in num_hit_candidates {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        hc_chunks.push(chunk);
+        remaining = rest;
+    }
+
+    convergent_indices
+        .par_iter()
+        .zip(hc_chunks.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|(indices, chunk)| {
+            for (i, candidate) in indices
+                .as_ref()
+                .iter()
+                .map(|&v| v)
+                .tuple_combinations()
+                .enumerate()
+            {
+                chunk[i].write(candidate);
+            }
+        });
+
+    let mut hit_candidates = unsafe {
+        let ptr = hit_candidates_uninit.as_mut_ptr() as *mut (usize, usize);
+        let len = hit_candidates_uninit.len();
+        let cap = hit_candidates_uninit.capacity();
+        std::mem::forget(hit_candidates_uninit);
+        Vec::from_raw_parts(ptr, len, cap)
+    };
+
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+
+    hit_candidates
+}
+
+fn get_hit_candidates_from_cis_cross<T, U>(convergent_indices: &[(T, U)]) -> Vec<(usize, usize)>
+where
+    (T, U): Sync,
+    T: AsRef<[usize]>,
+    U: AsRef<[usize]>,
+{
+    let num_hit_candidates = convergent_indices
+        .iter()
+        .map(|(qi, ri)| qi.as_ref().len() * ri.as_ref().len())
+        .collect_vec();
+
+    let total_capacity = num_hit_candidates.iter().sum();
+    let mut hit_candidates_uninit: Vec<MaybeUninit<(usize, usize)>> =
+        Vec::with_capacity(total_capacity);
+    unsafe { hit_candidates_uninit.set_len(total_capacity) };
+
+    let mut hc_chunks: Vec<&mut [MaybeUninit<(usize, usize)>]> =
+        Vec::with_capacity(convergent_indices.len());
+    let mut remaining = &mut hit_candidates_uninit[..];
+    for n in num_hit_candidates {
+        let (chunk, rest) = remaining.split_at_mut(n);
+        hc_chunks.push(chunk);
+        remaining = rest;
+    }
+
+    convergent_indices
+        .par_iter()
+        .zip(hc_chunks.into_par_iter())
+        .with_min_len(100000)
+        .for_each(|((indices_q, indices_r), chunk)| {
+            for (i, candidate) in indices_q
+                .as_ref()
+                .iter()
+                .map(|&v| v)
+                .cartesian_product(indices_r.as_ref().iter().map(|&v| v))
+                .enumerate()
+            {
+                chunk[i].write(candidate);
+            }
+        });
+
+    let mut hit_candidates = unsafe {
+        let ptr = hit_candidates_uninit.as_mut_ptr() as *mut (usize, usize);
+        let len = hit_candidates_uninit.len();
+        let cap = hit_candidates_uninit.capacity();
+        std::mem::forget(hit_candidates_uninit);
+        Vec::from_raw_parts(ptr, len, cap)
+    };
+
+    hit_candidates.par_sort_unstable();
+    hit_candidates.dedup();
+
+    hit_candidates
 }
 
 /// Examine and double check hits to see if they are real
@@ -645,13 +799,7 @@ fn compute_dists(
         .map(|(idx_query, idx_reference)| {
             let string_query = &query[idx_query];
             let string_reference = &reference[idx_reference];
-            let dist = if (string_query.len() > string_reference.len()
-                && string_query.len() - string_reference.len() == max_distance as usize)
-                || (string_query.len() < string_reference.len()
-                    && string_reference.len() - string_query.len() == max_distance as usize)
-            {
-                max_distance
-            } else {
+            let dist = {
                 let full_dist =
                     levenshtein::distance(string_query.chars(), string_reference.chars());
                 if full_dist > max_distance as usize {
@@ -684,43 +832,45 @@ mod tests {
     #[test]
     fn test_get_num_vi_pairs() {
         let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
-        let result = get_num_vi_pairs(&strings, 1);
-        assert_eq!(result, 12);
+        let result = get_num_deletion_variants(&strings, 1);
+        assert_eq!(result, vec![4, 4, 4]);
     }
 
     #[test]
     fn test_get_deletion_variants() {
-        let variants = get_deletion_variants("foo", 1);
-        let expected = vec!["fo".into(), "foo".into(), "oo".into()];
-        assert_eq!(variants, expected);
+        let hash_builder = FixedState::with_seed(42);
 
-        let variants = get_deletion_variants("foo", 2);
-        let expected = vec![
-            "f".into(),
-            "fo".into(),
-            "foo".into(),
-            "o".into(),
-            "oo".into(),
+        let variants = get_deletion_variants("foo", 1, &hash_builder);
+        let mut expected = vec![
+            hash_string("fo", &hash_builder),
+            hash_string("foo", &hash_builder),
+            hash_string("oo", &hash_builder),
         ];
+        expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants("foo", 10);
-        let expected = vec![
-            "".into(),
-            "f".into(),
-            "fo".into(),
-            "foo".into(),
-            "o".into(),
-            "oo".into(),
+        let variants = get_deletion_variants("foo", 2, &hash_builder);
+        let mut expected = vec![
+            hash_string("f", &hash_builder),
+            hash_string("fo", &hash_builder),
+            hash_string("foo", &hash_builder),
+            hash_string("o", &hash_builder),
+            hash_string("oo", &hash_builder),
         ];
+        expected.sort_unstable();
         assert_eq!(variants, expected);
-    }
 
-    #[test]
-    fn test_get_num_hit_candidates() {
-        let convergent_indices = &[vec![1, 2, 3], vec![1, 2, 3, 4], vec![1, 2]];
-        let result = get_num_hit_candidates(convergent_indices);
-        assert_eq!(result, 10);
+        let variants = get_deletion_variants("foo", 10, &hash_builder);
+        let mut expected = vec![
+            hash_string("", &hash_builder),
+            hash_string("f", &hash_builder),
+            hash_string("fo", &hash_builder),
+            hash_string("foo", &hash_builder),
+            hash_string("o", &hash_builder),
+            hash_string("oo", &hash_builder),
+        ];
+        expected.sort_unstable();
+        assert_eq!(variants, expected);
     }
 
     #[test]

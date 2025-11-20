@@ -236,6 +236,7 @@ name = "nearust"
 version = "0.5.1"
 dependencies = [
  "clap",
+ "foldhash",
  "hashbrown",
  "itertools",
  "numpy",
