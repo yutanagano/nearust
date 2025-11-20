@@ -171,13 +171,8 @@ impl CachedSymdel {
                     write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
                 });
 
-            let mut variant_index_pairs = unsafe {
-                let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, usize);
-                let len = variant_index_pairs_uninit.len();
-                let cap = variant_index_pairs_uninit.capacity();
-                std::mem::forget(variant_index_pairs_uninit);
-                Vec::from_raw_parts(ptr, len, cap)
-            };
+            let mut variant_index_pairs =
+                unsafe { cast_to_initialised_vec(variant_index_pairs_uninit) };
 
             variant_index_pairs.par_sort_unstable();
             variant_index_pairs.dedup();
@@ -272,7 +267,7 @@ pub fn get_candidates_within(
         ));
     }
 
-    let convergent_indices = {
+    let (convergent_indices, group_sizes) = {
         let num_del_variants = get_num_deletion_variants(query, max_distance);
 
         let total_capacity = num_del_variants.iter().sum();
@@ -288,43 +283,62 @@ pub fn get_candidates_within(
             remaining = rest;
         }
 
+        debug_assert_eq!(remaining.len(), 0);
+        debug_assert_eq!(vip_chunks.len(), query.len());
+
         let hash_builder = FixedState::with_seed(42);
 
         query
             .par_iter()
-            .enumerate()
             .zip(vip_chunks.into_par_iter())
+            .enumerate()
             .with_min_len(100000)
-            .for_each(|((idx, s), chunk)| {
+            .for_each(|(idx, (s, chunk))| {
                 write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
             });
 
-        let mut variant_index_pairs = unsafe {
-            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, usize);
-            let len = variant_index_pairs_uninit.len();
-            let cap = variant_index_pairs_uninit.capacity();
-            std::mem::forget(variant_index_pairs_uninit);
-            Vec::from_raw_parts(ptr, len, cap)
-        };
+        let mut variant_index_pairs =
+            unsafe { cast_to_initialised_vec(variant_index_pairs_uninit) };
 
         variant_index_pairs.par_sort_unstable();
         variant_index_pairs.dedup();
 
-        let mut convergent_indices = Vec::new();
+        let mut total_num_convergent_indices = 0;
+        let mut num_convergence_groups = 0;
+
         variant_index_pairs
             .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-            .for_each(|group| {
-                if group.len() == 1 {
-                    return;
-                }
-                let indices = group.iter().map(|(_, idx)| *idx).collect_vec();
-                convergent_indices.push(indices);
+            .filter(|chunk| chunk.len() > 1)
+            .for_each(|chunk| {
+                total_num_convergent_indices += chunk.len();
+                num_convergence_groups += 1;
             });
 
-        convergent_indices
+        let mut convergent_indices = Vec::with_capacity(total_num_convergent_indices);
+        let mut convergence_group_sizes = Vec::with_capacity(num_convergence_groups);
+
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .filter(|chunk| chunk.len() > 1)
+            .for_each(|chunk| {
+                convergent_indices.extend(chunk.iter().map(|&(_, i)| i));
+                convergence_group_sizes.push(chunk.len());
+            });
+
+        (convergent_indices, convergence_group_sizes)
     };
 
-    let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
+    let mut convergent_chunks = Vec::with_capacity(group_sizes.len());
+    let mut remaining = &convergent_indices[..];
+    for n in group_sizes {
+        let (chunk, rest) = remaining.split_at(n);
+        convergent_chunks.push(chunk);
+        remaining = rest;
+    }
+
+    debug_assert_eq!(remaining.len(), 0);
+
+    let hit_candidates = get_hit_candidates_from_cis_within(&convergent_chunks);
 
     Ok(hit_candidates)
 }
@@ -391,13 +405,8 @@ pub fn get_candidates_cross(
                 write_deletion_variants_cci(s, idx, max_distance, true, chunk, &hash_builder);
             });
 
-        let mut variant_index_pairs = unsafe {
-            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, CrossComparisonIndex);
-            let len = variant_index_pairs_uninit.len();
-            let cap = variant_index_pairs_uninit.capacity();
-            std::mem::forget(variant_index_pairs_uninit);
-            Vec::from_raw_parts(ptr, len, cap)
-        };
+        let mut variant_index_pairs =
+            unsafe { cast_to_initialised_vec(variant_index_pairs_uninit) };
 
         variant_index_pairs
             .par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
@@ -600,6 +609,14 @@ fn hash_string(s: impl AsRef<[u8]>, hash_builder: &impl BuildHasher) -> u64 {
     hasher.finish()
 }
 
+unsafe fn cast_to_initialised_vec<T>(mut input: Vec<MaybeUninit<T>>) -> Vec<T> {
+    let ptr = input.as_mut_ptr() as *mut T;
+    let len = input.len();
+    let cap = input.capacity();
+    std::mem::forget(input);
+    Vec::from_raw_parts(ptr, len, cap)
+}
+
 fn get_hit_candidates_from_cis_within<T>(convergent_indices: &[T]) -> Vec<(usize, usize)>
 where
     T: AsRef<[usize]> + Sync,
@@ -639,13 +656,7 @@ where
             }
         });
 
-    let mut hit_candidates = unsafe {
-        let ptr = hit_candidates_uninit.as_mut_ptr() as *mut (usize, usize);
-        let len = hit_candidates_uninit.len();
-        let cap = hit_candidates_uninit.capacity();
-        std::mem::forget(hit_candidates_uninit);
-        Vec::from_raw_parts(ptr, len, cap)
-    };
+    let mut hit_candidates = unsafe { cast_to_initialised_vec(hit_candidates_uninit) };
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
@@ -694,13 +705,7 @@ where
             }
         });
 
-    let mut hit_candidates = unsafe {
-        let ptr = hit_candidates_uninit.as_mut_ptr() as *mut (usize, usize);
-        let len = hit_candidates_uninit.len();
-        let cap = hit_candidates_uninit.capacity();
-        std::mem::forget(hit_candidates_uninit);
-        Vec::from_raw_parts(ptr, len, cap)
-    };
+    let mut hit_candidates = unsafe { cast_to_initialised_vec(hit_candidates_uninit) };
 
     hit_candidates.par_sort_unstable();
     hit_candidates.dedup();
