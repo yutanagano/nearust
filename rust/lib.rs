@@ -799,13 +799,7 @@ fn compute_dists(
         .map(|(idx_query, idx_reference)| {
             let string_query = &query[idx_query];
             let string_reference = &reference[idx_reference];
-            let dist = if (string_query.len() > string_reference.len()
-                && string_query.len() - string_reference.len() == max_distance as usize)
-                || (string_query.len() < string_reference.len()
-                    && string_reference.len() - string_query.len() == max_distance as usize)
-            {
-                max_distance
-            } else {
+            let dist = {
                 let full_dist =
                     levenshtein::distance(string_query.chars(), string_reference.chars());
                 if full_dist > max_distance as usize {
