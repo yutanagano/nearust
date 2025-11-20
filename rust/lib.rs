@@ -351,11 +351,11 @@ pub fn get_candidates_cross(
 
         let total_capacity =
             num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
-        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(Box<str>, CrossComparisonIndex)>> =
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, CrossComparisonIndex)>> =
             Vec::with_capacity(total_capacity);
         unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(Box<str>, CrossComparisonIndex)>]> =
+        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
             Vec::with_capacity(query.len());
         let mut remaining = &mut variant_index_pairs_uninit[..];
         for n in num_del_variants_q {
@@ -364,7 +364,7 @@ pub fn get_candidates_cross(
             remaining = rest;
         }
 
-        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(Box<str>, CrossComparisonIndex)>]> =
+        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
             Vec::with_capacity(query.len());
         for n in num_del_variants_r {
             let (chunk, rest) = remaining.split_at_mut(n);
@@ -372,13 +372,15 @@ pub fn get_candidates_cross(
             remaining = rest;
         }
 
+        let hash_builder = FixedState::with_seed(42);
+
         query
             .par_iter()
             .enumerate()
             .zip(vip_chunks_q.into_par_iter())
             .with_min_len(100000)
             .for_each(|((idx, s), chunk)| {
-                write_deletion_variants_cci(s, idx, max_distance, false, chunk);
+                write_deletion_variants_cci(s, idx, max_distance, false, chunk, &hash_builder);
             });
         reference
             .par_iter()
@@ -386,12 +388,11 @@ pub fn get_candidates_cross(
             .zip(vip_chunks_r.into_par_iter())
             .with_min_len(100000)
             .for_each(|((idx, s), chunk)| {
-                write_deletion_variants_cci(s, idx, max_distance, true, chunk);
+                write_deletion_variants_cci(s, idx, max_distance, true, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs = unsafe {
-            let ptr =
-                variant_index_pairs_uninit.as_mut_ptr() as *mut (Box<str>, CrossComparisonIndex);
+            let ptr = variant_index_pairs_uninit.as_mut_ptr() as *mut (u64, CrossComparisonIndex);
             let len = variant_index_pairs_uninit.len();
             let cap = variant_index_pairs_uninit.capacity();
             std::mem::forget(variant_index_pairs_uninit);
@@ -506,14 +507,21 @@ fn write_deletion_variants_cci(
     input_idx: usize,
     max_deletions: u8,
     is_ref: bool,
-    chunk: &mut [MaybeUninit<(Box<str>, CrossComparisonIndex)>],
+    chunk: &mut [MaybeUninit<(u64, CrossComparisonIndex)>],
+    hash_builder: &impl BuildHasher,
 ) {
     let input_length = input.len();
 
     chunk[0].write(if is_ref {
-        (input.into(), CrossComparisonIndex::Reference(input_idx))
+        (
+            hash_string(input, hash_builder),
+            CrossComparisonIndex::Reference(input_idx),
+        )
     } else {
-        (input.into(), CrossComparisonIndex::Query(input_idx))
+        (
+            hash_string(input, hash_builder),
+            CrossComparisonIndex::Query(input_idx),
+        )
     });
 
     let mut variant_idx = 1;
@@ -533,9 +541,15 @@ fn write_deletion_variants_cci(
             variant.push_str(&input[offset..input_length]);
 
             chunk[variant_idx].write(if is_ref {
-                (variant.into(), CrossComparisonIndex::Reference(input_idx))
+                (
+                    hash_string(variant, hash_builder),
+                    CrossComparisonIndex::Reference(input_idx),
+                )
             } else {
-                (variant.into(), CrossComparisonIndex::Query(input_idx))
+                (
+                    hash_string(variant, hash_builder),
+                    CrossComparisonIndex::Query(input_idx),
+                )
             });
             variant_idx += 1;
         }
