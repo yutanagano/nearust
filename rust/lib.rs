@@ -118,7 +118,7 @@ impl CachedSymdel {
             .with_min_len(100000)
             .enumerate()
             .for_each_with(tx, |transmitter, (idx, s)| {
-                let hashed_variants = get_deletion_variants(s, max_distance, &hash_builder);
+                let hashed_variants = get_del_var_hashes(s, max_distance, &hash_builder);
                 transmitter.send((idx, hashed_variants)).unwrap();
             });
 
@@ -207,7 +207,7 @@ impl CachedSymdel {
                 .zip(vip_chunks.into_par_iter())
                 .with_min_len(100000)
                 .for_each(|((idx, s), chunk)| {
-                    write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                    write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
                 });
 
             let mut variant_index_pairs =
@@ -333,7 +333,7 @@ pub fn get_candidates_within(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_deletion_variants_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs =
@@ -437,7 +437,7 @@ pub fn get_candidates_cross(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_deletion_variants_cci(s, idx, max_distance, false, chunk, &hash_builder);
+                write_vi_pairs_ci(s, idx, max_distance, false, chunk, &hash_builder);
             });
         reference
             .par_iter()
@@ -445,7 +445,7 @@ pub fn get_candidates_cross(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_deletion_variants_cci(s, idx, max_distance, true, chunk, &hash_builder);
+                write_vi_pairs_ci(s, idx, max_distance, true, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs =
@@ -549,7 +549,7 @@ fn get_num_k_combs(n: usize, k: u8) -> usize {
 /// Given an input string and its index in the original input vector, generate all possible strings
 /// after making at most max_deletions single-character deletions, compute their hash, and write
 /// them into the slots in the provided chunk, as 2-tuples (hash, input_idx).
-fn write_deletion_variants_rawidx(
+fn write_vi_pairs_rawidx(
     input: &str,
     input_idx: usize,
     max_deletions: u8,
@@ -582,8 +582,8 @@ fn write_deletion_variants_rawidx(
     }
 }
 
-/// Similar to write_deletion_variants_rawidx but with the indices wrapped in CrossComparisonIndex.
-fn write_deletion_variants_cci(
+/// Similar to write_deletion_variants_rawidx but with the indices wrapped in CrossIndex.
+fn write_vi_pairs_ci(
     input: &str,
     input_idx: usize,
     max_deletions: u8,
@@ -639,11 +639,7 @@ fn write_deletion_variants_cci(
 
 /// Similar to the write_deletion_variants functions but instead of writing to slots in a slice,
 /// returns a vector containing the variants.
-fn get_deletion_variants(
-    input: &str,
-    max_deletions: u8,
-    hash_builder: &impl BuildHasher,
-) -> Vec<u64> {
+fn get_del_var_hashes(input: &str, max_deletions: u8, hash_builder: &impl BuildHasher) -> Vec<u64> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
@@ -917,7 +913,7 @@ mod tests {
     fn test_get_deletion_variants() {
         let hash_builder = FixedState::with_seed(42);
 
-        let variants = get_deletion_variants("foo", 1, &hash_builder);
+        let variants = get_del_var_hashes("foo", 1, &hash_builder);
         let mut expected = vec![
             hash_string("fo", &hash_builder),
             hash_string("foo", &hash_builder),
@@ -926,7 +922,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants("foo", 2, &hash_builder);
+        let variants = get_del_var_hashes("foo", 2, &hash_builder);
         let mut expected = vec![
             hash_string("f", &hash_builder),
             hash_string("fo", &hash_builder),
@@ -937,7 +933,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_deletion_variants("foo", 10, &hash_builder);
+        let variants = get_del_var_hashes("foo", 10, &hash_builder);
         let mut expected = vec![
             hash_string("", &hash_builder),
             hash_string("f", &hash_builder),
