@@ -18,6 +18,14 @@ enum CrossComparisonIndex {
     Reference(usize),
 }
 
+impl CrossComparisonIndex {
+    fn get_index(&self) -> usize {
+        match self {
+            Self::Query(v) | Self::Reference(v) => *v,
+        }
+    }
+}
+
 #[derive(Default)]
 struct IdentityHasher(u64);
 
@@ -359,7 +367,7 @@ pub fn get_candidates_cross(
         ));
     }
 
-    let convergent_indices = {
+    let (convergent_indices, group_sizes) = {
         let num_del_variants_q = get_num_deletion_variants(query, max_distance);
         let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
 
@@ -379,29 +387,33 @@ pub fn get_candidates_cross(
         }
 
         let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
-            Vec::with_capacity(query.len());
+            Vec::with_capacity(reference.len());
         for n in num_del_variants_r {
             let (chunk, rest) = remaining.split_at_mut(n);
             vip_chunks_r.push(chunk);
             remaining = rest;
         }
 
+        debug_assert_eq!(remaining.len(), 0);
+        debug_assert_eq!(vip_chunks_q.len(), query.len());
+        debug_assert_eq!(vip_chunks_r.len(), reference.len());
+
         let hash_builder = FixedState::with_seed(42);
 
         query
             .par_iter()
-            .enumerate()
             .zip(vip_chunks_q.into_par_iter())
+            .enumerate()
             .with_min_len(100000)
-            .for_each(|((idx, s), chunk)| {
+            .for_each(|(idx, (s, chunk))| {
                 write_deletion_variants_cci(s, idx, max_distance, false, chunk, &hash_builder);
             });
         reference
             .par_iter()
-            .enumerate()
             .zip(vip_chunks_r.into_par_iter())
+            .enumerate()
             .with_min_len(100000)
-            .for_each(|((idx, s), chunk)| {
+            .for_each(|(idx, (s, chunk))| {
                 write_deletion_variants_cci(s, idx, max_distance, true, chunk, &hash_builder);
             });
 
@@ -412,34 +424,69 @@ pub fn get_candidates_cross(
             .par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
         variant_index_pairs.dedup();
 
-        let mut convergent_indices = Vec::new();
+        let mut total_num_convergent_indices = 0;
+        let mut num_convergence_groups = 0;
+
         variant_index_pairs
             .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-            .for_each(|group| {
-                if group.len() == 1 {
-                    return;
-                }
-
-                let mut indices_query = Vec::new();
-                let mut indices_reference = Vec::new();
-
-                group.iter().for_each(|&(_, idx)| match idx {
-                    CrossComparisonIndex::Query(v) => indices_query.push(v),
-                    CrossComparisonIndex::Reference(v) => indices_reference.push(v),
-                });
-
-                let num_index_pairs = indices_query.len() * indices_reference.len();
-                if num_index_pairs == 0 {
-                    return;
-                }
-
-                convergent_indices.push((indices_query, indices_reference));
+            .filter(|chunk| chunk.len() > 1)
+            .for_each(|chunk| {
+                total_num_convergent_indices += chunk.len();
+                num_convergence_groups += 1;
             });
 
-        convergent_indices
+        let mut convergent_indices = Vec::with_capacity(total_num_convergent_indices);
+        let mut convergence_group_sizes = Vec::with_capacity(num_convergence_groups);
+
+        variant_index_pairs
+            .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+            .filter(|chunk| chunk.len() > 1)
+            .map(|chunk| {
+                let len_q = chunk
+                    .iter()
+                    .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Query(_)))
+                    .count();
+
+                let len_r = chunk
+                    .iter()
+                    .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Reference(_)))
+                    .count();
+
+                (chunk, len_q, len_r)
+            })
+            .filter(|(_, len_q, len_r)| len_q * len_r > 0)
+            .for_each(|(chunk, len_q, len_r)| {
+                convergent_indices.extend(
+                    chunk
+                        .iter()
+                        .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Query(_)))
+                        .map(|&(_, cci)| cci.get_index()),
+                );
+                convergent_indices.extend(
+                    chunk
+                        .iter()
+                        .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Reference(_)))
+                        .map(|&(_, cci)| cci.get_index()),
+                );
+
+                convergence_group_sizes.push((len_q, len_r));
+            });
+
+        (convergent_indices, convergence_group_sizes)
     };
 
-    let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
+    let mut convergent_chunks = Vec::with_capacity(group_sizes.len());
+    let mut remaining = &convergent_indices[..];
+    for (n_q, n_r) in group_sizes {
+        let (chunk_q, rest) = remaining.split_at(n_q);
+        let (chunk_r, rest) = rest.split_at(n_r);
+        convergent_chunks.push((chunk_q, chunk_r));
+        remaining = rest;
+    }
+
+    debug_assert_eq!(remaining.len(), 0);
+
+    let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_chunks);
 
     Ok(hit_candidates)
 }
