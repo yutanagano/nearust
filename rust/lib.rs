@@ -4,25 +4,56 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
+use std::fmt::Debug;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
 use std::mem::MaybeUninit;
+use std::ops::{BitAnd, BitOr};
 use std::sync::mpsc;
 use std::{u8, usize};
 
 mod pymod;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum CrossComparisonIndex {
-    Query(usize),
-    Reference(usize),
+trait CrossComparable: Copy + BitAnd<Output = Self> + BitOr<Output = Self> + PartialEq + Debug {
+    const TYPE_MASK: Self;
+    const VALUE_MASK: Self;
 }
 
-impl CrossComparisonIndex {
-    fn get_index(&self) -> usize {
-        match self {
-            Self::Query(v) | Self::Reference(v) => *v,
+impl CrossComparable for usize {
+    const TYPE_MASK: Self = 1 << (usize::BITS - 1);
+    const VALUE_MASK: Self = !Self::TYPE_MASK;
+}
+
+impl CrossComparable for u32 {
+    const TYPE_MASK: Self = 1 << 31;
+    const VALUE_MASK: Self = !Self::TYPE_MASK;
+}
+
+impl CrossComparable for u64 {
+    const TYPE_MASK: Self = 1 << 63;
+    const VALUE_MASK: Self = !Self::TYPE_MASK;
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct CrossIndex<T: CrossComparable>(T);
+
+impl<T: CrossComparable> CrossIndex<T> {
+    fn from(value: T, is_ref: bool) -> Self {
+        debug_assert_ne!(value & T::TYPE_MASK, T::TYPE_MASK);
+
+        if is_ref {
+            Self(value | T::TYPE_MASK)
+        } else {
+            Self(value)
         }
+    }
+
+    fn is_ref(&self) -> bool {
+        self.0 & T::TYPE_MASK == T::TYPE_MASK
+    }
+
+    fn get_value(&self) -> T {
+        self.0 & T::VALUE_MASK
     }
 }
 
@@ -373,11 +404,11 @@ pub fn get_candidates_cross(
 
         let total_capacity =
             num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
-        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, CrossComparisonIndex)>> =
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, CrossIndex<usize>)>> =
             Vec::with_capacity(total_capacity);
         unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
 
-        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
+        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossIndex<usize>)>]> =
             Vec::with_capacity(query.len());
         let mut remaining = &mut variant_index_pairs_uninit[..];
         for n in num_del_variants_q {
@@ -386,7 +417,7 @@ pub fn get_candidates_cross(
             remaining = rest;
         }
 
-        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossComparisonIndex)>]> =
+        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossIndex<usize>)>]> =
             Vec::with_capacity(reference.len());
         for n in num_del_variants_r {
             let (chunk, rest) = remaining.split_at_mut(n);
@@ -442,15 +473,9 @@ pub fn get_candidates_cross(
             .chunk_by(|(v1, _), (v2, _)| v1 == v2)
             .filter(|chunk| chunk.len() > 1)
             .map(|chunk| {
-                let len_q = chunk
-                    .iter()
-                    .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Query(_)))
-                    .count();
+                let len_q = chunk.iter().filter(|(_, ci)| !ci.is_ref()).count();
 
-                let len_r = chunk
-                    .iter()
-                    .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Reference(_)))
-                    .count();
+                let len_r = chunk.iter().filter(|(_, ci)| ci.is_ref()).count();
 
                 (chunk, len_q, len_r)
             })
@@ -459,14 +484,14 @@ pub fn get_candidates_cross(
                 convergent_indices.extend(
                     chunk
                         .iter()
-                        .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Query(_)))
-                        .map(|&(_, cci)| cci.get_index()),
+                        .filter(|(_, ci)| !ci.is_ref())
+                        .map(|&(_, ci)| ci.get_value()),
                 );
                 convergent_indices.extend(
                     chunk
                         .iter()
-                        .filter(|(_, cci)| matches!(cci, CrossComparisonIndex::Reference(_)))
-                        .map(|&(_, cci)| cci.get_index()),
+                        .filter(|(_, ci)| ci.is_ref())
+                        .map(|&(_, ci)| ci.get_value()),
                 );
 
                 convergence_group_sizes.push((len_q, len_r));
@@ -563,7 +588,7 @@ fn write_deletion_variants_cci(
     input_idx: usize,
     max_deletions: u8,
     is_ref: bool,
-    chunk: &mut [MaybeUninit<(u64, CrossComparisonIndex)>],
+    chunk: &mut [MaybeUninit<(u64, CrossIndex<usize>)>],
     hash_builder: &impl BuildHasher,
 ) {
     let input_length = input.len();
@@ -571,12 +596,12 @@ fn write_deletion_variants_cci(
     chunk[0].write(if is_ref {
         (
             hash_string(input, hash_builder),
-            CrossComparisonIndex::Reference(input_idx),
+            CrossIndex::from(input_idx, true),
         )
     } else {
         (
             hash_string(input, hash_builder),
-            CrossComparisonIndex::Query(input_idx),
+            CrossIndex::from(input_idx, false),
         )
     });
 
@@ -599,12 +624,12 @@ fn write_deletion_variants_cci(
             chunk[variant_idx].write(if is_ref {
                 (
                     hash_string(variant, hash_builder),
-                    CrossComparisonIndex::Reference(input_idx),
+                    CrossIndex::from(input_idx, true),
                 )
             } else {
                 (
                     hash_string(variant, hash_builder),
-                    CrossComparisonIndex::Query(input_idx),
+                    CrossIndex::from(input_idx, false),
                 )
             });
             variant_idx += 1;
