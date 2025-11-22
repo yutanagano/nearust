@@ -8,14 +8,17 @@ repository = "https://github.com/yutanagano/nearust"
 homepage = "https://github.com/yutanagano/nearust"
 
 [dependencies]
-clap = { version = "4.5.20", features = ["derive"] }
-itertools = "0.13.0"
-rapidfuzz = "0.5.0"
-rayon = "1.10.0"
-pyo3 = "0.27.1"
-numpy = "0.27.0"
-hashbrown = { version = "0.16.0", features = ["rayon"] }
-foldhash = "0.2.0"
+clap = { version = "4.5", features = ["derive"] }
+itertools = "0.13"
+rapidfuzz = "0.5"
+rayon = "1.10"
+pyo3 = "0.27"
+numpy = "0.27"
+hashbrown = { version = "0.16", features = ["rayon"] }
+foldhash = "0.2"
+
+[dev-dependencies]
+criterion = "0.3"
 
 # The profile that 'dist' will build with
 [profile.dist]
@@ -30,3 +33,7 @@ crate-type = ["lib", "cdylib"]
 [[bin]]
 name = "nearust"
 path = "rust/main.rs"
+
+[[bench]]
+name = "benchmark"
+harness = false
