@@ -782,7 +782,7 @@ where
 }
 
 /// Examine and double check hits to see if they are real
-fn get_true_hits(
+pub fn get_true_hits(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],

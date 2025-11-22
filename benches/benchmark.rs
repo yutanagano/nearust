@@ -1,27 +1,63 @@
-use _lib::{get_candidates_cross, get_candidates_within, get_input_lines_as_ascii};
+use _lib::{
+    compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
+    CachedSymdel,
+};
 use criterion::{criterion_group, criterion_main, Criterion};
-use std::fs::File;
-use std::io::BufReader;
+use std::io::Cursor;
+
+static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
+static REFERENCE_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
+
+fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
+    get_input_lines_as_ascii(Cursor::new(bytes)).expect("test files should be valid ASCII")
+}
 
 fn setup_benchmarks(c: &mut Criterion) {
-    let f =
-        BufReader::new(File::open("test_files/cdr3b_10k_a.txt").expect("can't read test query"));
-    let query = get_input_lines_as_ascii(f).expect("can't process test query");
+    let query = bytes_as_ascii_lines(QUERY_BYTES);
+    let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
+    let cached_query = CachedSymdel::new(query.clone(), 1).expect("instantiation failed");
+    let cached_reference = CachedSymdel::new(reference.clone(), 1).expect("instantiation failed");
 
-    let f = BufReader::new(
-        File::open("test_files/cdr3b_10k_b.txt").expect("can't read test reference"),
-    );
-    let reference = get_input_lines_as_ascii(f).expect("can't process test reference");
-
-    c.bench_function("within", |b| {
+    c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
             let _ = get_candidates_within(&query, 1);
         })
     });
 
-    c.bench_function("cross", |b| {
+    c.bench_function("get_candidates_cross", |b| {
         b.iter(|| {
             let _ = get_candidates_cross(&query, &reference, 1);
+        })
+    });
+
+    c.bench_function("get_candidates_within (cached)", |b| {
+        b.iter(|| {
+            let _ = cached_reference.symdel_within(1, true);
+        })
+    });
+
+    c.bench_function("get_candidates_cross (cached)", |b| {
+        b.iter(|| {
+            let _ = cached_reference.symdel_cross(&query, 1, true);
+        })
+    });
+
+    c.bench_function("get_candidates_cross (cached-on-cached)", |b| {
+        b.iter(|| {
+            let _ = cached_reference.symdel_cross_against_cached(&cached_query, 1, true);
+        })
+    });
+
+    c.bench_function("cached instantiation", |b| {
+        b.iter(|| {
+            let _ = CachedSymdel::new(reference.clone(), 1);
+        })
+    });
+
+    c.bench_function("compute_dists", |b| {
+        let candidates = get_candidates_cross(&query, &reference, 1).unwrap();
+        b.iter(|| {
+            let _ = compute_dists(candidates.clone(), &query, &reference, 1);
         })
     });
 }

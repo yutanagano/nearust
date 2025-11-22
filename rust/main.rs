@@ -136,7 +136,7 @@ fn get_file_bufreader(path: &str) -> BufReader<File> {
 }
 
 /// Write to stdout
-pub fn write_true_results(
+fn write_true_results(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
