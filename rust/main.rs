@@ -1,10 +1,8 @@
-use _lib::{
-    get_candidates_cross, get_candidates_within, get_input_lines_as_ascii, write_true_results,
-};
+use _lib::{compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii};
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::process;
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
@@ -135,4 +133,101 @@ fn get_file_bufreader(path: &str) -> BufReader<File> {
         process::exit(1)
     });
     BufReader::new(file)
+}
+
+/// Write to stdout
+pub fn write_true_results(
+    hit_candidates: Vec<(usize, usize)>,
+    query: &[String],
+    reference: &[String],
+    max_distance: u8,
+    zero_index: bool,
+    writer: &mut impl Write,
+) {
+    let candidates_with_dists = compute_dists(hit_candidates, query, reference, max_distance);
+    for (q_idx, ref_idx, dist) in candidates_with_dists.iter() {
+        if *dist > max_distance {
+            continue;
+        }
+
+        if zero_index {
+            write!(writer, "{},{},{}\n", q_idx, ref_idx, dist).unwrap();
+        } else {
+            write!(writer, "{},{},{}\n", q_idx + 1, ref_idx + 1, dist).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use io::Cursor;
+    use std::sync::LazyLock;
+
+    static QUERY: LazyLock<Vec<String>> =
+        LazyLock::new(|| bytes_as_ascii_lines(include_bytes!("../test_files/cdr3b_10k_a.txt")));
+    static REFERENCE: LazyLock<Vec<String>> =
+        LazyLock::new(|| bytes_as_ascii_lines(include_bytes!("../test_files/cdr3b_10k_b.txt")));
+
+    fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
+        let f = Cursor::new(bytes);
+        get_input_lines_as_ascii(f).expect("test files should be valid ASCII")
+    }
+
+    #[test]
+    fn test_within() {
+        let mut test_output_stream = Vec::new();
+
+        let results = get_candidates_within(&QUERY, 1).expect("candidate generation broke");
+        write_true_results(results, &QUERY, &QUERY, 1, false, &mut test_output_stream);
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_a.txt")
+        );
+
+        test_output_stream.clear();
+
+        let results = get_candidates_within(&QUERY, 2).expect("candidate generation broke");
+        write_true_results(results, &QUERY, &QUERY, 2, false, &mut test_output_stream);
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_a_d2.txt")
+        )
+    }
+
+    #[test]
+    fn test_cross() {
+        let mut test_output_stream = Vec::new();
+
+        let results = get_candidates_cross(&QUERY, &REFERENCE, 1).unwrap();
+        write_true_results(
+            results,
+            &QUERY,
+            &REFERENCE,
+            1,
+            false,
+            &mut test_output_stream,
+        );
+
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_cross.txt")
+        );
+
+        test_output_stream.clear();
+
+        let results = get_candidates_cross(&QUERY, &REFERENCE, 2).unwrap();
+        write_true_results(
+            results,
+            &QUERY,
+            &REFERENCE,
+            2,
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_cross_d2.txt")
+        );
+    }
 }

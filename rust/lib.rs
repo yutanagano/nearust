@@ -6,7 +6,7 @@ use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
+use std::io::{self, BufRead, Error, ErrorKind::InvalidData};
 use std::mem::MaybeUninit;
 use std::ops::{BitAnd, BitOr};
 use std::sync::mpsc;
@@ -837,30 +837,7 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
     Ok(strings)
 }
 
-/// Write to stdout
-pub fn write_true_results(
-    hit_candidates: Vec<(usize, usize)>,
-    query: &[String],
-    reference: &[String],
-    max_distance: u8,
-    zero_index: bool,
-    writer: &mut impl Write,
-) {
-    let candidates_with_dists = compute_dists(hit_candidates, query, reference, max_distance);
-    for (q_idx, ref_idx, dist) in candidates_with_dists.iter() {
-        if *dist > max_distance {
-            continue;
-        }
-
-        if zero_index {
-            write!(writer, "{},{},{}\n", q_idx, ref_idx, dist).unwrap();
-        } else {
-            write!(writer, "{},{},{}\n", q_idx + 1, ref_idx + 1, dist).unwrap();
-        }
-    }
-}
-
-fn compute_dists(
+pub fn compute_dists(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
@@ -891,7 +868,8 @@ fn compute_dists(
 mod tests {
     use super::*;
     use std::fs::File;
-    use std::io::{BufReader, Read};
+    use std::io::{BufReader, Cursor};
+    use std::sync::LazyLock;
 
     #[test]
     fn test_get_num_k_combinations() {
@@ -953,99 +931,23 @@ mod tests {
         assert_eq!(strings, expected);
     }
 
-    /// Run the following tests from the project home directory so that the test CDR3 text files
-    /// can be found at the expected paths
-    #[test]
-    fn test_within() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let test_input = get_input_lines_as_ascii(f).unwrap();
+    static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
+    static REFERENCE_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
+    static EXPECTED_BYTES_WITHIN_1: &[u8] = include_bytes!("../test_files/results_10k_a.txt");
+    static EXPECTED_BYTES_WITHIN_2: &[u8] = include_bytes!("../test_files/results_10k_a_d2.txt");
+    static EXPECTED_BYTES_CROSS_1: &[u8] = include_bytes!("../test_files/results_10k_cross.txt");
+    static EXPECTED_BYTES_CROSS_2: &[u8] = include_bytes!("../test_files/results_10k_cross_d2.txt");
 
-        let mut f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
-        let mut expected_output = Vec::new();
-        f.read_to_end(&mut expected_output).unwrap();
-
-        let mut test_output_stream = Vec::new();
-        let results = get_candidates_within(&test_input, 1).unwrap();
-        write_true_results(
-            results,
-            &test_input,
-            &test_input,
-            1,
-            false,
-            &mut test_output_stream,
-        );
-
-        assert_eq!(test_output_stream, expected_output);
-
-        expected_output.clear();
-        test_output_stream.clear();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_a_d2.txt").unwrap());
-        f.read_to_end(&mut expected_output).unwrap();
-
-        let results = get_candidates_within(&test_input, 2).unwrap();
-        write_true_results(
-            results,
-            &test_input,
-            &test_input,
-            2,
-            false,
-            &mut test_output_stream,
-        );
-
-        assert_eq!(test_output_stream, expected_output)
+    fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
+        get_input_lines_as_ascii(Cursor::new(bytes)).expect("test files should be valid ASCII")
     }
 
-    #[test]
-    fn test_cross() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let primary_input = get_input_lines_as_ascii(f).unwrap();
-
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-        let comparison_input = get_input_lines_as_ascii(f).unwrap();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let mut expected_output = Vec::new();
-        f.read_to_end(&mut expected_output).unwrap();
-
-        let mut test_output_stream = Vec::new();
-        let results = get_candidates_cross(&primary_input, &comparison_input, 1).unwrap();
-        write_true_results(
-            results,
-            &primary_input,
-            &comparison_input,
-            1,
-            false,
-            &mut test_output_stream,
-        );
-
-        assert_eq!(test_output_stream, expected_output);
-
-        expected_output.clear();
-        test_output_stream.clear();
-
-        let mut f = BufReader::new(File::open("test_files/results_10k_cross_d2.txt").unwrap());
-        f.read_to_end(&mut expected_output).unwrap();
-
-        let results = get_candidates_cross(&primary_input, &comparison_input, 2).unwrap();
-        write_true_results(
-            results,
-            &primary_input,
-            &comparison_input,
-            2,
-            false,
-            &mut test_output_stream,
-        );
-
-        assert_eq!(test_output_stream, expected_output);
-    }
-
-    fn written_to_coo(in_stream: impl BufRead) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+    fn bytes_as_coo(bytes: &[u8]) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
         let mut q_indices = Vec::new();
         let mut ref_indices = Vec::new();
         let mut dists = Vec::new();
 
-        for line_res in in_stream.lines() {
+        for line_res in Cursor::new(bytes).lines() {
             let line = line_res.unwrap();
             let mut parts = line.split(",");
 
@@ -1062,53 +964,74 @@ mod tests {
     }
 
     #[test]
+    fn test_within() {
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+
+        let candidates = get_candidates_within(&query, 1).expect("candidate generation broke");
+        let results = get_true_hits(candidates, &query, &query, 1, false);
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
+
+        let candidates = get_candidates_within(&query, 2).expect("candidate generation broke");
+        let results = get_true_hits(candidates, &query, &query, 2, false);
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2))
+    }
+
+    #[test]
+    fn test_cross() {
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
+
+        let candidates =
+            get_candidates_cross(&query, &reference, 1).expect("candidate generation broke");
+        let results = get_true_hits(candidates, &query, &reference, 1, false);
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
+
+        let candidates =
+            get_candidates_cross(&query, &reference, 2).expect("candidate generation broke");
+        let results = get_true_hits(candidates, &query, &reference, 2, false);
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2))
+    }
+
+    #[test]
     fn test_within_cached() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let test_input = get_input_lines_as_ascii(f).unwrap();
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
 
-        let f = BufReader::new(File::open("test_files/results_10k_a.txt").unwrap());
-        let expected_output = written_to_coo(f);
-
-        let cached = CachedSymdel::new(test_input, 1).unwrap();
+        let cached = CachedSymdel::new(query, 2).unwrap();
         let results = cached.symdel_within(1, false).unwrap();
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
 
-        assert_eq!(results, expected_output);
+        let results = cached.symdel_within(2, false).unwrap();
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2));
     }
 
     #[test]
     fn test_cross_cached() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let primary_input = get_input_lines_as_ascii(f).unwrap();
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-        let comparison_input = get_input_lines_as_ascii(f).unwrap();
+        let cached = CachedSymdel::new(reference, 2).unwrap();
+        let results = cached.symdel_cross(&query, 1, false).unwrap();
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
-        let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let expected_output = written_to_coo(f);
-
-        let cached = CachedSymdel::new(comparison_input, 1).unwrap();
-        let results = cached.symdel_cross(&primary_input, 1, false).unwrap();
-
-        assert_eq!(results, expected_output);
+        let results = cached.symdel_cross(&query, 2, false).unwrap();
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2));
     }
 
     #[test]
     fn test_cross_cached_against_cached() {
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-        let primary_input = get_input_lines_as_ascii(f).unwrap();
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-        let comparison_input = get_input_lines_as_ascii(f).unwrap();
-
-        let f = BufReader::new(File::open("test_files/results_10k_cross.txt").unwrap());
-        let expected_output = written_to_coo(f);
-
-        let cached_query = CachedSymdel::new(primary_input, 1).unwrap();
-        let cached_reference = CachedSymdel::new(comparison_input, 1).unwrap();
+        let cached_query = CachedSymdel::new(query, 2).unwrap();
+        let cached_reference = CachedSymdel::new(reference, 2).unwrap();
         let results = cached_reference
             .symdel_cross_against_cached(&cached_query, 1, false)
             .unwrap();
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
-        assert_eq!(results, expected_output);
+        let results = cached_reference
+            .symdel_cross_against_cached(&cached_query, 2, false)
+            .unwrap();
+        assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2));
     }
 }

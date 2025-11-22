@@ -4,11 +4,14 @@ use std::fs::File;
 use std::io::BufReader;
 
 fn setup_benchmarks(c: &mut Criterion) {
-    let f = BufReader::new(File::open("test_files/cdr3b_10k_a.txt").unwrap());
-    let query = get_input_lines_as_ascii(f).expect("can't read test query");
+    let f =
+        BufReader::new(File::open("test_files/cdr3b_10k_a.txt").expect("can't read test query"));
+    let query = get_input_lines_as_ascii(f).expect("can't process test query");
 
-    let f = BufReader::new(File::open("test_files/cdr3b_10k_b.txt").unwrap());
-    let reference = get_input_lines_as_ascii(f).expect("can't read test reference");
+    let f = BufReader::new(
+        File::open("test_files/cdr3b_10k_b.txt").expect("can't read test reference"),
+    );
+    let reference = get_input_lines_as_ascii(f).expect("can't process test reference");
 
     c.bench_function("within", |b| {
         b.iter(|| {
