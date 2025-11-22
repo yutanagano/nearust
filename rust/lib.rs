@@ -1,5 +1,4 @@
 use foldhash::fast::FixedState;
-use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
@@ -8,9 +7,8 @@ use std::fmt::Debug;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufRead, Error, ErrorKind::InvalidData};
 use std::mem::MaybeUninit;
-use std::ops::{BitAnd, BitOr};
-use std::sync::mpsc;
-use std::{u8, usize};
+use std::ops::{BitAnd, BitOr, Range};
+use std::{ptr, u8, usize};
 
 mod pymod;
 
@@ -109,49 +107,158 @@ impl BuildHasher for IdentityHasherBuilder {
     }
 }
 
+struct Span {
+    start: usize,
+    len: usize,
+}
+
+impl Span {
+    fn new(start: usize, len: usize) -> Self {
+        Span { start, len }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    fn as_range(&self) -> Range<usize> {
+        self.start..self.start + self.len
+    }
+}
+
 /// Class for assymetric cross-set symdel where the reference is known beforehand, and a variant
 /// hashmap (mapping deletion variants to all the original strings that could have produced that
 /// variant) can be computed beforehand to expedite multiple future queries against that same
 /// reference.
 pub struct CachedSymdel {
-    reference: Vec<String>,
-    variant_map: HashMap<u64, Vec<usize>, IdentityHasherBuilder>,
+    str_store: Vec<u8>,
+    str_spans: Vec<Span>,
+    index_store: Vec<usize>,
+    variant_map: HashMap<u64, Span, IdentityHasherBuilder>,
     max_distance: MaxDistance,
 }
 
 impl CachedSymdel {
-    pub fn new(reference: Vec<String>, max_distance: MaxDistance) -> Self {
-        let hash_builder = FixedState::with_seed(42);
-        let id_builder = IdentityHasherBuilder::default();
-        let mut variant_map = HashMap::with_hasher(id_builder);
-        let (tx, rx) = mpsc::channel();
+    pub fn new(reference: &[String], max_distance: MaxDistance) -> Self {
+        let (str_store, str_spans) = {
+            let strlens = reference.iter().map(|s| s.len()).collect_vec();
+            let total_capacity = strlens.iter().sum();
 
-        reference
-            .par_iter()
-            .with_min_len(100000)
-            .enumerate()
-            .for_each_with(tx, |transmitter, (idx, s)| {
-                let hashed_variants = get_del_var_hashes(s, max_distance, &hash_builder);
-                transmitter.send((idx, hashed_variants)).unwrap();
-            });
+            let mut str_store_uninit: Vec<MaybeUninit<u8>> = Vec::with_capacity(total_capacity);
+            unsafe { str_store_uninit.set_len(total_capacity) };
 
-        for (idx, hashed_variants) in rx {
-            for h in hashed_variants.into_iter() {
-                match variant_map.raw_entry_mut().from_key_hashed_nocheck(h, &h) {
-                    RawEntryMut::Vacant(view) => {
-                        view.insert_hashed_nocheck(h, h, vec![idx]);
-                    }
-                    RawEntryMut::Occupied(mut view) => {
-                        let v = view.get_mut();
-                        v.push(idx);
-                        v.sort_unstable();
-                    }
-                }
+            let mut str_spans = Vec::with_capacity(reference.len());
+            let mut cursor = 0;
+            for &n in strlens.iter() {
+                str_spans.push(Span::new(cursor, n));
+                cursor += n;
             }
+
+            debug_assert_eq!(cursor, str_store_uninit.len());
+            debug_assert_eq!(str_spans.len(), reference.len());
+
+            let mut str_store_chunks = Vec::with_capacity(reference.len());
+            let mut remaining = &mut str_store_uninit[..];
+            for n in strlens {
+                let (chunk, rest) = remaining.split_at_mut(n);
+                str_store_chunks.push(chunk);
+                remaining = rest;
+            }
+
+            debug_assert_eq!(remaining.len(), 0);
+            debug_assert_eq!(str_store_chunks.len(), reference.len());
+
+            reference
+                .par_iter()
+                .zip(str_store_chunks.into_par_iter())
+                .with_min_len(100000)
+                .for_each(|(s, chunk)| {
+                    debug_assert_eq!(s.len(), chunk.len());
+                    unsafe {
+                        ptr::copy_nonoverlapping(s.as_ptr(), chunk.as_mut_ptr() as *mut u8, s.len())
+                    };
+                });
+
+            let str_store = unsafe { cast_to_initialised_vec(str_store_uninit) };
+
+            (str_store, str_spans)
+        };
+
+        let hash_builder = FixedState::with_seed(42);
+
+        let (index_store, convergence_groups) = {
+            let num_del_variants = get_num_deletion_variants(reference, max_distance);
+
+            let total_capacity = num_del_variants.iter().sum();
+            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
+                Vec::with_capacity(total_capacity);
+            unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
+
+            let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> =
+                Vec::with_capacity(reference.len());
+            let mut remaining = &mut variant_index_pairs_uninit[..];
+            for n in num_del_variants {
+                let (chunk, rest) = remaining.split_at_mut(n);
+                vip_chunks.push(chunk);
+                remaining = rest;
+            }
+
+            debug_assert_eq!(remaining.len(), 0);
+            debug_assert_eq!(vip_chunks.len(), reference.len());
+
+            reference
+                .par_iter()
+                .zip(vip_chunks.into_par_iter())
+                .enumerate()
+                .with_min_len(100000)
+                .for_each(|(idx, (s, chunk))| {
+                    write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                });
+
+            let mut variant_index_pairs =
+                unsafe { cast_to_initialised_vec(variant_index_pairs_uninit) };
+
+            variant_index_pairs.par_sort_unstable();
+            variant_index_pairs.dedup();
+
+            let mut total_num_convergent_indices = 0;
+            let mut num_convergence_groups = 0;
+
+            variant_index_pairs
+                .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+                .for_each(|chunk| {
+                    total_num_convergent_indices += chunk.len();
+                    num_convergence_groups += 1;
+                });
+
+            let mut convergent_indices = Vec::with_capacity(total_num_convergent_indices);
+            let mut convergence_groups = Vec::with_capacity(num_convergence_groups);
+            let mut cursor = 0;
+
+            variant_index_pairs
+                .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+                .for_each(|chunk| {
+                    convergent_indices.extend(chunk.iter().map(|&(_, i)| i));
+                    convergence_groups.push((chunk[0].0, Span::new(cursor, chunk.len())));
+                    cursor += chunk.len();
+                });
+
+            debug_assert_eq!(cursor, convergent_indices.len());
+
+            (convergent_indices, convergence_groups)
+        };
+
+        let mut variant_map = HashMap::with_hasher(IdentityHasherBuilder::default());
+
+        for (v_hash, index_range) in convergence_groups {
+            variant_map.entry(v_hash).insert(index_range);
         }
 
         CachedSymdel {
-            reference,
+            str_store,
+            str_spans,
+            index_store,
             variant_map,
             max_distance,
         }
@@ -166,23 +273,17 @@ impl CachedSymdel {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
         }
 
-        let mut convergent_indices = Vec::new();
-        self.variant_map.iter().for_each(|(_, indices)| {
-            if indices.len() == 1 {
+        let mut convergent_indices = Vec::with_capacity(self.variant_map.len());
+        self.variant_map.iter().for_each(|(_, span)| {
+            if span.len() == 1 {
                 return;
             }
-            convergent_indices.push(indices);
+            convergent_indices.push(self.get_convergent_indices_from_span(span));
         });
 
         let hit_candidates = get_hit_candidates_from_cis_within(&convergent_indices);
 
-        Ok(get_true_hits(
-            hit_candidates,
-            &self.reference,
-            &self.reference,
-            max_distance,
-            zero_index,
-        ))
+        Ok(self.get_true_hits_fully_cached(hit_candidates, self, max_distance, zero_index))
     }
 
     pub fn symdel_cross(
@@ -238,7 +339,10 @@ impl CachedSymdel {
                         None => return,
                         Some(indices_ref) => {
                             let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                            convergent_indices.push((indices_query, indices_ref));
+                            convergent_indices.push((
+                                indices_query,
+                                self.get_convergent_indices_from_span(indices_ref),
+                            ));
                         }
                     }
                 });
@@ -248,13 +352,7 @@ impl CachedSymdel {
 
         let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
-        Ok(get_true_hits(
-            hit_candidates,
-            query,
-            &self.reference,
-            max_distance,
-            zero_index,
-        ))
+        Ok(self.get_true_hits_partially_cached(hit_candidates, query, max_distance, zero_index))
     }
 
     pub fn symdel_cross_against_cached(
@@ -277,7 +375,10 @@ impl CachedSymdel {
                 match self.variant_map.get(variant) {
                     None => return,
                     Some(indices_ref) => {
-                        convergent_indices.push((indices_q, indices_ref));
+                        convergent_indices.push((
+                            query.get_convergent_indices_from_span(indices_q),
+                            self.get_convergent_indices_from_span(indices_ref),
+                        ));
                     }
                 }
             });
@@ -286,7 +387,10 @@ impl CachedSymdel {
                 match query.variant_map.get(variant) {
                     None => return,
                     Some(indices_query) => {
-                        convergent_indices.push((indices_query, indices_r));
+                        convergent_indices.push((
+                            query.get_convergent_indices_from_span(indices_query),
+                            self.get_convergent_indices_from_span(indices_r),
+                        ));
                     }
                 }
             });
@@ -294,13 +398,115 @@ impl CachedSymdel {
 
         let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
 
-        Ok(get_true_hits(
-            hit_candidates,
-            &query.reference,
-            &self.reference,
-            max_distance,
-            zero_index,
-        ))
+        Ok(self.get_true_hits_fully_cached(hit_candidates, &query, max_distance, zero_index))
+    }
+
+    #[inline(always)]
+    fn get_convergent_indices_from_span(&self, span: &Span) -> &[usize] {
+        &self.index_store[span.as_range()]
+    }
+
+    #[inline(always)]
+    fn get_str_at_index(&self, i: usize) -> &str {
+        unsafe { str::from_utf8_unchecked(&self.str_store[self.str_spans[i].as_range()]) }
+    }
+
+    fn get_true_hits_partially_cached(
+        &self,
+        hit_candidates: Vec<(usize, usize)>,
+        query: &[String],
+        max_distance: MaxDistance,
+        zero_index: bool,
+    ) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+        let candidates_with_dist: Vec<(usize, usize, u8)> = hit_candidates
+            .into_par_iter()
+            .with_min_len(100000)
+            .map(|(idx_query, idx_reference)| {
+                let string_query = &query[idx_query];
+                let string_reference = self.get_str_at_index(idx_reference);
+                let dist = {
+                    let full_dist =
+                        levenshtein::distance(string_query.chars(), string_reference.chars());
+                    if full_dist > max_distance.as_u8() as usize {
+                        u8::MAX
+                    } else {
+                        full_dist as u8
+                    }
+                };
+
+                (idx_query, idx_reference, dist)
+            })
+            .collect();
+
+        let mut q_indices = Vec::with_capacity(candidates_with_dist.len());
+        let mut ref_indices = Vec::with_capacity(candidates_with_dist.len());
+        let mut dists = Vec::with_capacity(candidates_with_dist.len());
+
+        for (qi, ri, d) in candidates_with_dist.into_iter() {
+            if d > max_distance.as_u8() {
+                continue;
+            }
+            if zero_index {
+                q_indices.push(qi);
+                ref_indices.push(ri);
+                dists.push(d);
+            } else {
+                q_indices.push(qi + 1);
+                ref_indices.push(ri + 1);
+                dists.push(d);
+            }
+        }
+
+        (q_indices, ref_indices, dists)
+    }
+
+    fn get_true_hits_fully_cached(
+        &self,
+        hit_candidates: Vec<(usize, usize)>,
+        query: &Self,
+        max_distance: MaxDistance,
+        zero_index: bool,
+    ) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+        let candidates_with_dist: Vec<(usize, usize, u8)> = hit_candidates
+            .into_par_iter()
+            .with_min_len(100000)
+            .map(|(idx_query, idx_reference)| {
+                let string_query = query.get_str_at_index(idx_query);
+                let string_reference = self.get_str_at_index(idx_reference);
+                let dist = {
+                    let full_dist =
+                        levenshtein::distance(string_query.chars(), string_reference.chars());
+                    if full_dist > max_distance.as_u8() as usize {
+                        u8::MAX
+                    } else {
+                        full_dist as u8
+                    }
+                };
+
+                (idx_query, idx_reference, dist)
+            })
+            .collect();
+
+        let mut q_indices = Vec::with_capacity(candidates_with_dist.len());
+        let mut ref_indices = Vec::with_capacity(candidates_with_dist.len());
+        let mut dists = Vec::with_capacity(candidates_with_dist.len());
+
+        for (qi, ri, d) in candidates_with_dist.into_iter() {
+            if d > max_distance.as_u8() {
+                continue;
+            }
+            if zero_index {
+                q_indices.push(qi);
+                ref_indices.push(ri);
+                dists.push(d);
+            } else {
+                q_indices.push(qi + 1);
+                ref_indices.push(ri + 1);
+                dists.push(d);
+            }
+        }
+
+        (q_indices, ref_indices, dists)
     }
 }
 
@@ -980,7 +1186,7 @@ mod tests {
     fn test_within_cached() {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
 
-        let cached = CachedSymdel::new(query, MaxDistance(2));
+        let cached = CachedSymdel::new(&query, MaxDistance(2));
         let results = cached.symdel_within(MaxDistance(1), false).unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
 
@@ -993,7 +1199,7 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
         let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let cached = CachedSymdel::new(reference, MaxDistance(2));
+        let cached = CachedSymdel::new(&reference, MaxDistance(2));
         let results = cached.symdel_cross(&query, MaxDistance(1), false).unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
@@ -1006,8 +1212,8 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
         let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let cached_query = CachedSymdel::new(query, MaxDistance(2));
-        let cached_reference = CachedSymdel::new(reference, MaxDistance(2));
+        let cached_query = CachedSymdel::new(&query, MaxDistance(2));
+        let cached_reference = CachedSymdel::new(&reference, MaxDistance(2));
         let results = cached_reference
             .symdel_cross_against_cached(&cached_query, MaxDistance(1), false)
             .unwrap();

@@ -1,6 +1,4 @@
-use crate::MaxDistance;
-
-use super::{get_candidates_cross, get_candidates_within, get_true_hits};
+use super::{get_candidates_cross, get_candidates_within, get_true_hits, MaxDistance};
 use numpy::IntoPyArray;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
 use std::usize;
@@ -16,7 +14,7 @@ impl CachedSymdel {
     fn new(reference: Vec<String>, max_distance: u8) -> PyResult<Self> {
         check_strings_ascii(&reference)?;
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let internal = super::CachedSymdel::new(reference, max_distance);
+        let internal = super::CachedSymdel::new(&reference, max_distance);
         Ok(CachedSymdel { internal })
     }
 

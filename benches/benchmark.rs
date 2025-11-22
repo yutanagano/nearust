@@ -16,8 +16,8 @@ fn setup_benchmarks(c: &mut Criterion) {
     let query = bytes_as_ascii_lines(QUERY_BYTES);
     let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
     let mdist = MaxDistance::try_from(1).expect("1 is a valid MaxDistance");
-    let cached_query = CachedSymdel::new(query.clone(), mdist);
-    let cached_reference = CachedSymdel::new(reference.clone(), mdist);
+    let cached_query = CachedSymdel::new(&query, mdist);
+    let cached_reference = CachedSymdel::new(&reference, mdist);
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
@@ -51,7 +51,7 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("cached instantiation", |b| {
         b.iter(|| {
-            let _ = CachedSymdel::new(reference.clone(), mdist);
+            let _ = CachedSymdel::new(&reference, mdist);
         })
     });
 
