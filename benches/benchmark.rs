@@ -1,6 +1,6 @@
 use _lib::{
     compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
-    CachedSymdel,
+    CachedSymdel, MaxDistance,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::Cursor;
@@ -15,49 +15,50 @@ fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
 fn setup_benchmarks(c: &mut Criterion) {
     let query = bytes_as_ascii_lines(QUERY_BYTES);
     let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
-    let cached_query = CachedSymdel::new(query.clone(), 1).expect("instantiation failed");
-    let cached_reference = CachedSymdel::new(reference.clone(), 1).expect("instantiation failed");
+    let mdist = MaxDistance::try_from(1).expect("1 is a valid MaxDistance");
+    let cached_query = CachedSymdel::new(query.clone(), mdist);
+    let cached_reference = CachedSymdel::new(reference.clone(), mdist);
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
-            let _ = get_candidates_within(&query, 1);
+            let _ = get_candidates_within(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross", |b| {
         b.iter(|| {
-            let _ = get_candidates_cross(&query, &reference, 1);
+            let _ = get_candidates_cross(&query, &reference, mdist);
         })
     });
 
     c.bench_function("get_candidates_within (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_within(1, true);
+            let _ = cached_reference.symdel_within(mdist, true);
         })
     });
 
     c.bench_function("get_candidates_cross (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross(&query, 1, true);
+            let _ = cached_reference.symdel_cross(&query, mdist, true);
         })
     });
 
     c.bench_function("get_candidates_cross (cached-on-cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross_against_cached(&cached_query, 1, true);
+            let _ = cached_reference.symdel_cross_against_cached(&cached_query, mdist, true);
         })
     });
 
     c.bench_function("cached instantiation", |b| {
         b.iter(|| {
-            let _ = CachedSymdel::new(reference.clone(), 1);
+            let _ = CachedSymdel::new(reference.clone(), mdist);
         })
     });
 
     c.bench_function("compute_dists", |b| {
-        let candidates = get_candidates_cross(&query, &reference, 1).unwrap();
+        let candidates = get_candidates_cross(&query, &reference, mdist);
         b.iter(|| {
-            let _ = compute_dists(candidates.clone(), &query, &reference, 1);
+            let _ = compute_dists(candidates.clone(), &query, &reference, mdist);
         })
     });
 }

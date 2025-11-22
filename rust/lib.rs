@@ -14,6 +14,30 @@ use std::{u8, usize};
 
 mod pymod;
 
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub struct MaxDistance(u8);
+
+impl MaxDistance {
+    pub fn as_u8(&self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<u8> for MaxDistance {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value == u8::MAX {
+            Err(Error::new(
+                InvalidData,
+                format!("max_distance must be less than {} (got {})", u8::MAX, value),
+            ))
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
 trait CrossComparable: Copy + BitAnd<Output = Self> + BitOr<Output = Self> + PartialEq + Debug {
     const TYPE_MASK: Self;
     const VALUE_MASK: Self;
@@ -92,22 +116,11 @@ impl BuildHasher for IdentityHasherBuilder {
 pub struct CachedSymdel {
     reference: Vec<String>,
     variant_map: HashMap<u64, Vec<usize>, IdentityHasherBuilder>,
-    max_distance: u8,
+    max_distance: MaxDistance,
 }
 
 impl CachedSymdel {
-    pub fn new(reference: Vec<String>, max_distance: u8) -> io::Result<Self> {
-        if max_distance == u8::MAX {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "max_distance must be less than {} (got {})",
-                    u8::MAX,
-                    max_distance
-                ),
-            ));
-        }
-
+    pub fn new(reference: Vec<String>, max_distance: MaxDistance) -> Self {
         let hash_builder = FixedState::with_seed(42);
         let id_builder = IdentityHasherBuilder::default();
         let mut variant_map = HashMap::with_hasher(id_builder);
@@ -137,20 +150,20 @@ impl CachedSymdel {
             }
         }
 
-        Ok(CachedSymdel {
+        CachedSymdel {
             reference,
             variant_map,
             max_distance,
-        })
+        }
     }
 
     pub fn symdel_within(
         &self,
-        max_distance: u8,
+        max_distance: MaxDistance,
         zero_index: bool,
     ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
         }
 
         let mut convergent_indices = Vec::new();
@@ -175,11 +188,11 @@ impl CachedSymdel {
     pub fn symdel_cross(
         &self,
         query: &[String],
-        max_distance: u8,
+        max_distance: MaxDistance,
         zero_index: bool,
     ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
         }
 
         let convergent_indices = {
@@ -247,15 +260,15 @@ impl CachedSymdel {
     pub fn symdel_cross_against_cached(
         &self,
         query: &Self,
-        max_distance: u8,
+        max_distance: MaxDistance,
         zero_index: bool,
     ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance, self.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
         }
 
         if max_distance > query.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance, query.max_distance)));
+            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance.as_u8(), query.max_distance.as_u8())));
         }
 
         let mut convergent_indices = Vec::new();
@@ -291,21 +304,7 @@ impl CachedSymdel {
     }
 }
 
-pub fn get_candidates_within(
-    query: &[String],
-    max_distance: u8,
-) -> io::Result<Vec<(usize, usize)>> {
-    if max_distance == u8::MAX {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "max_distance must be less than {} (got {})",
-                u8::MAX,
-                max_distance
-            ),
-        ));
-    }
-
+pub fn get_candidates_within(query: &[String], max_distance: MaxDistance) -> Vec<(usize, usize)> {
     let (convergent_indices, group_sizes) = {
         let num_del_variants = get_num_deletion_variants(query, max_distance);
 
@@ -377,27 +376,14 @@ pub fn get_candidates_within(
 
     debug_assert_eq!(remaining.len(), 0);
 
-    let hit_candidates = get_hit_candidates_from_cis_within(&convergent_chunks);
-
-    Ok(hit_candidates)
+    get_hit_candidates_from_cis_within(&convergent_chunks)
 }
 
 pub fn get_candidates_cross(
     query: &[String],
     reference: &[String],
-    max_distance: u8,
-) -> io::Result<Vec<(usize, usize)>> {
-    if max_distance == u8::MAX {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "max_distance must be less than {} (got {})",
-                u8::MAX,
-                max_distance
-            ),
-        ));
-    }
-
+    max_distance: MaxDistance,
+) -> Vec<(usize, usize)> {
     let (convergent_indices, group_sizes) = {
         let num_del_variants_q = get_num_deletion_variants(query, max_distance);
         let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
@@ -511,17 +497,15 @@ pub fn get_candidates_cross(
 
     debug_assert_eq!(remaining.len(), 0);
 
-    let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_chunks);
-
-    Ok(hit_candidates)
+    get_hit_candidates_from_cis_cross(&convergent_chunks)
 }
 
-fn get_num_deletion_variants(strings: &[String], max_distance: u8) -> Vec<usize> {
+fn get_num_deletion_variants(strings: &[String], max_distance: MaxDistance) -> Vec<usize> {
     strings
         .iter()
         .map(|s| {
             let mut num_vars = 0;
-            for k in 0..=max_distance {
+            for k in 0..=max_distance.as_u8() {
                 if k as usize > s.len() {
                     break;
                 }
@@ -552,7 +536,7 @@ fn get_num_k_combs(n: usize, k: u8) -> usize {
 fn write_vi_pairs_rawidx(
     input: &str,
     input_idx: usize,
-    max_deletions: u8,
+    max_deletions: MaxDistance,
     chunk: &mut [MaybeUninit<(u64, usize)>],
     hash_builder: &impl BuildHasher,
 ) {
@@ -561,7 +545,7 @@ fn write_vi_pairs_rawidx(
     chunk[0].write((hash_string(input, hash_builder), input_idx));
 
     let mut variant_idx = 1;
-    for num_deletions in 1..=max_deletions {
+    for num_deletions in 1..=max_deletions.as_u8() {
         if num_deletions as usize > input_length {
             break;
         }
@@ -586,7 +570,7 @@ fn write_vi_pairs_rawidx(
 fn write_vi_pairs_ci(
     input: &str,
     input_idx: usize,
-    max_deletions: u8,
+    max_deletions: MaxDistance,
     is_ref: bool,
     chunk: &mut [MaybeUninit<(u64, CrossIndex<usize>)>],
     hash_builder: &impl BuildHasher,
@@ -606,7 +590,7 @@ fn write_vi_pairs_ci(
     });
 
     let mut variant_idx = 1;
-    for num_deletions in 1..=max_deletions {
+    for num_deletions in 1..=max_deletions.as_u8() {
         if num_deletions as usize > input_length {
             break;
         }
@@ -639,13 +623,17 @@ fn write_vi_pairs_ci(
 
 /// Similar to the write_deletion_variants functions but instead of writing to slots in a slice,
 /// returns a vector containing the variants.
-fn get_del_var_hashes(input: &str, max_deletions: u8, hash_builder: &impl BuildHasher) -> Vec<u64> {
+fn get_del_var_hashes(
+    input: &str,
+    max_deletions: MaxDistance,
+    hash_builder: &impl BuildHasher,
+) -> Vec<u64> {
     let input_length = input.len();
 
     let mut deletion_variants = Vec::new();
     deletion_variants.push(hash_string(input, hash_builder));
 
-    for num_deletions in 1..=max_deletions {
+    for num_deletions in 1..=max_deletions.as_u8() {
         if num_deletions as usize > input_length {
             deletion_variants.push(hash_string("", hash_builder));
             break;
@@ -786,7 +774,7 @@ pub fn get_true_hits(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
-    max_distance: u8,
+    max_distance: MaxDistance,
     zero_index: bool,
 ) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
     let candidates_with_dist = compute_dists(hit_candidates, query, reference, max_distance);
@@ -796,7 +784,7 @@ pub fn get_true_hits(
     let mut dists = Vec::with_capacity(candidates_with_dist.len());
 
     for (qi, ri, d) in candidates_with_dist.into_iter() {
-        if d > max_distance {
+        if d > max_distance.as_u8() {
             continue;
         }
         if zero_index {
@@ -841,7 +829,7 @@ pub fn compute_dists(
     hit_candidates: Vec<(usize, usize)>,
     query: &[String],
     reference: &[String],
-    max_distance: u8,
+    max_distance: MaxDistance,
 ) -> Vec<(usize, usize, u8)> {
     hit_candidates
         .into_par_iter()
@@ -852,7 +840,7 @@ pub fn compute_dists(
             let dist = {
                 let full_dist =
                     levenshtein::distance(string_query.chars(), string_reference.chars());
-                if full_dist > max_distance as usize {
+                if full_dist > max_distance.as_u8() as usize {
                     u8::MAX
                 } else {
                     full_dist as u8
@@ -867,9 +855,7 @@ pub fn compute_dists(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::{BufReader, Cursor};
-    use std::sync::LazyLock;
+    use std::io::Cursor;
 
     #[test]
     fn test_get_num_k_combinations() {
@@ -883,7 +869,7 @@ mod tests {
     #[test]
     fn test_get_num_vi_pairs() {
         let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
-        let result = get_num_deletion_variants(&strings, 1);
+        let result = get_num_deletion_variants(&strings, MaxDistance(1));
         assert_eq!(result, vec![4, 4, 4]);
     }
 
@@ -891,7 +877,7 @@ mod tests {
     fn test_get_deletion_variants() {
         let hash_builder = FixedState::with_seed(42);
 
-        let variants = get_del_var_hashes("foo", 1, &hash_builder);
+        let variants = get_del_var_hashes("foo", MaxDistance(1), &hash_builder);
         let mut expected = vec![
             hash_string("fo", &hash_builder),
             hash_string("foo", &hash_builder),
@@ -900,7 +886,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_del_var_hashes("foo", 2, &hash_builder);
+        let variants = get_del_var_hashes("foo", MaxDistance(2), &hash_builder);
         let mut expected = vec![
             hash_string("f", &hash_builder),
             hash_string("fo", &hash_builder),
@@ -911,7 +897,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(variants, expected);
 
-        let variants = get_del_var_hashes("foo", 10, &hash_builder);
+        let variants = get_del_var_hashes("foo", MaxDistance(10), &hash_builder);
         let mut expected = vec![
             hash_string("", &hash_builder),
             hash_string("f", &hash_builder),
@@ -967,12 +953,12 @@ mod tests {
     fn test_within() {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
 
-        let candidates = get_candidates_within(&query, 1).expect("candidate generation broke");
-        let results = get_true_hits(candidates, &query, &query, 1, false);
+        let candidates = get_candidates_within(&query, MaxDistance(1));
+        let results = get_true_hits(candidates, &query, &query, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
 
-        let candidates = get_candidates_within(&query, 2).expect("candidate generation broke");
-        let results = get_true_hits(candidates, &query, &query, 2, false);
+        let candidates = get_candidates_within(&query, MaxDistance(2));
+        let results = get_true_hits(candidates, &query, &query, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2))
     }
 
@@ -981,14 +967,12 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
         let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let candidates =
-            get_candidates_cross(&query, &reference, 1).expect("candidate generation broke");
-        let results = get_true_hits(candidates, &query, &reference, 1, false);
+        let candidates = get_candidates_cross(&query, &reference, MaxDistance(1));
+        let results = get_true_hits(candidates, &query, &reference, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
-        let candidates =
-            get_candidates_cross(&query, &reference, 2).expect("candidate generation broke");
-        let results = get_true_hits(candidates, &query, &reference, 2, false);
+        let candidates = get_candidates_cross(&query, &reference, MaxDistance(2));
+        let results = get_true_hits(candidates, &query, &reference, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2))
     }
 
@@ -996,11 +980,11 @@ mod tests {
     fn test_within_cached() {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
 
-        let cached = CachedSymdel::new(query, 2).unwrap();
-        let results = cached.symdel_within(1, false).unwrap();
+        let cached = CachedSymdel::new(query, MaxDistance(2));
+        let results = cached.symdel_within(MaxDistance(1), false).unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
 
-        let results = cached.symdel_within(2, false).unwrap();
+        let results = cached.symdel_within(MaxDistance(2), false).unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2));
     }
 
@@ -1009,11 +993,11 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
         let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let cached = CachedSymdel::new(reference, 2).unwrap();
-        let results = cached.symdel_cross(&query, 1, false).unwrap();
+        let cached = CachedSymdel::new(reference, MaxDistance(2));
+        let results = cached.symdel_cross(&query, MaxDistance(1), false).unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
-        let results = cached.symdel_cross(&query, 2, false).unwrap();
+        let results = cached.symdel_cross(&query, MaxDistance(2), false).unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2));
     }
 
@@ -1022,15 +1006,15 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
         let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let cached_query = CachedSymdel::new(query, 2).unwrap();
-        let cached_reference = CachedSymdel::new(reference, 2).unwrap();
+        let cached_query = CachedSymdel::new(query, MaxDistance(2));
+        let cached_reference = CachedSymdel::new(reference, MaxDistance(2));
         let results = cached_reference
-            .symdel_cross_against_cached(&cached_query, 1, false)
+            .symdel_cross_against_cached(&cached_query, MaxDistance(1), false)
             .unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
         let results = cached_reference
-            .symdel_cross_against_cached(&cached_query, 2, false)
+            .symdel_cross_against_cached(&cached_query, MaxDistance(2), false)
             .unwrap();
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2));
     }
