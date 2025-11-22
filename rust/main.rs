@@ -162,24 +162,21 @@ pub fn write_true_results(
 mod tests {
     use super::*;
     use io::Cursor;
-    use std::sync::LazyLock;
 
-    static QUERY: LazyLock<Vec<String>> =
-        LazyLock::new(|| bytes_as_ascii_lines(include_bytes!("../test_files/cdr3b_10k_a.txt")));
-    static REFERENCE: LazyLock<Vec<String>> =
-        LazyLock::new(|| bytes_as_ascii_lines(include_bytes!("../test_files/cdr3b_10k_b.txt")));
+    static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
+    static REFERENCE_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
 
     fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
-        let f = Cursor::new(bytes);
-        get_input_lines_as_ascii(f).expect("test files should be valid ASCII")
+        get_input_lines_as_ascii(Cursor::new(bytes)).expect("test files should be valid ASCII")
     }
 
     #[test]
     fn test_within() {
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
         let mut test_output_stream = Vec::new();
 
-        let results = get_candidates_within(&QUERY, 1).expect("candidate generation broke");
-        write_true_results(results, &QUERY, &QUERY, 1, false, &mut test_output_stream);
+        let results = get_candidates_within(&query, 1).expect("candidate generation broke");
+        write_true_results(results, &query, &query, 1, false, &mut test_output_stream);
         assert_eq!(
             test_output_stream,
             include_bytes!("../test_files/results_10k_a.txt")
@@ -187,8 +184,8 @@ mod tests {
 
         test_output_stream.clear();
 
-        let results = get_candidates_within(&QUERY, 2).expect("candidate generation broke");
-        write_true_results(results, &QUERY, &QUERY, 2, false, &mut test_output_stream);
+        let results = get_candidates_within(&query, 2).expect("candidate generation broke");
+        write_true_results(results, &query, &query, 2, false, &mut test_output_stream);
         assert_eq!(
             test_output_stream,
             include_bytes!("../test_files/results_10k_a_d2.txt")
@@ -197,13 +194,15 @@ mod tests {
 
     #[test]
     fn test_cross() {
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
         let mut test_output_stream = Vec::new();
 
-        let results = get_candidates_cross(&QUERY, &REFERENCE, 1).unwrap();
+        let results = get_candidates_cross(&query, &reference, 1).unwrap();
         write_true_results(
             results,
-            &QUERY,
-            &REFERENCE,
+            &query,
+            &reference,
             1,
             false,
             &mut test_output_stream,
@@ -216,11 +215,11 @@ mod tests {
 
         test_output_stream.clear();
 
-        let results = get_candidates_cross(&QUERY, &REFERENCE, 2).unwrap();
+        let results = get_candidates_cross(&query, &reference, 2).unwrap();
         write_true_results(
             results,
-            &QUERY,
-            &REFERENCE,
+            &query,
+            &reference,
             2,
             false,
             &mut test_output_stream,
