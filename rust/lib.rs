@@ -591,7 +591,29 @@ pub fn get_candidates_cross(
     query: &[String],
     reference: &[String],
     max_distance: MaxDistance,
-) -> Vec<(usize, usize)> {
+) -> io::Result<Vec<(usize, usize)>> {
+    if query.len() > usize::TYPE_MASK {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "query must not have more than {} elements, got {}",
+                usize::TYPE_MASK - 1,
+                query.len(),
+            ),
+        ));
+    }
+
+    if reference.len() > usize::TYPE_MASK {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "reference must not have more than {} elements, got {}",
+                usize::TYPE_MASK - 1,
+                query.len(),
+            ),
+        ));
+    }
+
     let (convergent_indices, group_sizes) = {
         let num_del_variants_q = get_num_del_vars_per_string(query, max_distance);
         let num_del_variants_r = get_num_del_vars_per_string(reference, max_distance);
@@ -703,7 +725,7 @@ pub fn get_candidates_cross(
 
     debug_assert_eq!(remaining.len(), 0);
 
-    get_hit_candidates_from_cis_cross(&convergent_chunks)
+    Ok(get_hit_candidates_from_cis_cross(&convergent_chunks))
 }
 
 fn get_num_del_vars_per_string(strings: &[String], max_distance: MaxDistance) -> Vec<usize> {
@@ -1130,11 +1152,13 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
         let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
 
-        let candidates = get_candidates_cross(&query, &reference, MaxDistance(1));
+        let candidates =
+            get_candidates_cross(&query, &reference, MaxDistance(1)).expect("valid inputs");
         let results = get_true_hits(candidates, &query, &reference, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
-        let candidates = get_candidates_cross(&query, &reference, MaxDistance(2));
+        let candidates =
+            get_candidates_cross(&query, &reference, MaxDistance(2)).expect("valid inputs");
         let results = get_true_hits(candidates, &query, &reference, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2))
     }

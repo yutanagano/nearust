@@ -124,7 +124,8 @@ fn symdel_cross<'py>(
     check_strings_ascii(&reference)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let hit_candidates = get_candidates_cross(&query, &reference, max_distance);
+    let hit_candidates =
+        get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
     let (q_indices, ref_indices, dists) =
         get_true_hits(hit_candidates, &query, &reference, max_distance, zero_index);
 
