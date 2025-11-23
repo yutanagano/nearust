@@ -19,6 +19,10 @@ impl MaxDistance {
     pub fn as_u8(&self) -> u8 {
         self.0
     }
+
+    pub fn as_usize(&self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl TryFrom<u8> for MaxDistance {
@@ -1060,12 +1064,13 @@ pub fn compute_dists(
             let string_query = &query[idx_query];
             let string_reference = &reference[idx_reference];
             let dist = {
-                let full_dist =
-                    levenshtein::distance(string_query.bytes(), string_reference.bytes());
-                if full_dist > max_distance.as_u8() as usize {
-                    u8::MAX
-                } else {
-                    full_dist as u8
+                match levenshtein::distance_with_args(
+                    string_query.bytes(),
+                    string_reference.bytes(),
+                    &levenshtein::Args::default().score_cutoff(max_distance.as_usize()),
+                ) {
+                    None => u8::MAX,
+                    Some(dist) => dist as u8,
                 }
             };
 
