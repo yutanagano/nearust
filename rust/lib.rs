@@ -5,7 +5,7 @@ use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{self, BufRead, Error, ErrorKind::InvalidData};
+use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
 use std::mem::MaybeUninit;
 use std::ops::{BitAnd, BitOr, Range};
 use std::{ptr, str, u8, usize};
@@ -749,8 +749,8 @@ fn get_num_del_vars_per_string(strings: &[String], max_distance: MaxDistance) ->
 }
 
 fn get_num_k_combs(n: usize, k: u8) -> usize {
-    assert!(n > 0);
-    assert!(n >= k as usize);
+    debug_assert!(n > 0);
+    debug_assert!(n >= k as usize);
 
     if k == 0 {
         return 1;
@@ -995,39 +995,6 @@ where
     hit_candidates
 }
 
-/// Examine and double check hits to see if they are real
-pub fn get_true_hits(
-    hit_candidates: &[(usize, usize)],
-    dists: &[u8],
-    max_distance: MaxDistance,
-    zero_index: bool,
-) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
-    let mut qi_filtered = Vec::with_capacity(dists.len());
-    let mut ri_filtered = Vec::with_capacity(dists.len());
-    let mut dists_filtered = Vec::with_capacity(dists.len());
-
-    for (&(qi, ri), &d) in hit_candidates.iter().zip(dists.iter()) {
-        if d > max_distance.as_u8() {
-            continue;
-        }
-        if zero_index {
-            qi_filtered.push(qi);
-            ri_filtered.push(ri);
-            dists_filtered.push(d);
-        } else {
-            qi_filtered.push(qi + 1);
-            ri_filtered.push(ri + 1);
-            dists_filtered.push(d);
-        }
-    }
-
-    qi_filtered.shrink_to_fit();
-    ri_filtered.shrink_to_fit();
-    dists_filtered.shrink_to_fit();
-
-    (qi_filtered, ri_filtered, dists_filtered)
-}
-
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
 /// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
 /// is guaranteed to only contain ASCII bytes.
@@ -1078,22 +1045,78 @@ pub fn compute_dists(
         .collect()
 }
 
+/// Examine and double check hits to see if they are real
+pub fn get_true_hits(
+    hit_candidates: &[(usize, usize)],
+    dists: &[u8],
+    max_distance: MaxDistance,
+    zero_index: bool,
+) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+    let mut qi_filtered = Vec::with_capacity(dists.len());
+    let mut ri_filtered = Vec::with_capacity(dists.len());
+    let mut dists_filtered = Vec::with_capacity(dists.len());
+
+    for (&(qi, ri), &d) in hit_candidates.iter().zip(dists.iter()) {
+        if d > max_distance.as_u8() {
+            continue;
+        }
+        if zero_index {
+            qi_filtered.push(qi);
+            ri_filtered.push(ri);
+            dists_filtered.push(d);
+        } else {
+            qi_filtered.push(qi + 1);
+            ri_filtered.push(ri + 1);
+            dists_filtered.push(d);
+        }
+    }
+
+    qi_filtered.shrink_to_fit();
+    ri_filtered.shrink_to_fit();
+    dists_filtered.shrink_to_fit();
+
+    (qi_filtered, ri_filtered, dists_filtered)
+}
+
+/// Write to stdout
+pub fn write_true_results(
+    hit_candidates: &[(usize, usize)],
+    dists: &[u8],
+    max_distance: MaxDistance,
+    zero_index: bool,
+    writer: &mut impl Write,
+) {
+    for (&(qi, ri), &d) in hit_candidates.into_iter().zip(dists.into_iter()) {
+        if d > max_distance.as_u8() {
+            continue;
+        }
+
+        if zero_index {
+            write!(writer, "{},{},{}\n", qi, ri, d).unwrap();
+        } else {
+            write!(writer, "{},{},{}\n", qi + 1, ri + 1, d).unwrap();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    #[test]
-    fn test_get_num_k_combinations() {
-        let result = get_num_k_combs(5, 2);
-        assert_eq!(result, 10);
+    // component tests
 
-        let result = get_num_k_combs(5, 0);
-        assert_eq!(result, 1);
+    #[test]
+    fn test_nck() {
+        let cases = [(5, 2, 10), (5, 5, 1), (5, 0, 1)];
+        for (n, k, expected) in cases {
+            let result = get_num_k_combs(n, k);
+            assert_eq!(result, expected);
+        }
     }
 
     #[test]
-    fn test_get_num_vi_pairs() {
+    fn test_get_num_del_vars_per_string() {
         let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
         let result = get_num_del_vars_per_string(&strings, MaxDistance(1));
         assert_eq!(result, vec![4, 4, 4]);
@@ -1101,10 +1124,19 @@ mod tests {
 
     #[test]
     fn test_get_input_lines_as_ascii() {
-        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes()).unwrap();
+        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes())
+            .expect("input is valid ASCII");
         let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
         assert_eq!(strings, expected);
     }
+
+    #[test]
+    fn test_get_input_lines_as_ascii_rejects_non_ascii() {
+        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nバズ\n".as_bytes());
+        assert!(matches!(strings, Err(_)));
+    }
+
+    // testing on real world data
 
     static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
     static REFERENCE_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
