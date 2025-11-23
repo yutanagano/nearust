@@ -143,31 +143,10 @@ impl CachedSymdel {
     pub fn new(reference: &[String], max_distance: MaxDistance) -> Self {
         let (str_store, str_spans) = {
             let strlens = reference.iter().map(|s| s.len()).collect_vec();
-            let total_capacity = strlens.iter().sum();
 
-            let mut str_store_uninit: Vec<MaybeUninit<u8>> = Vec::with_capacity(total_capacity);
-            unsafe { str_store_uninit.set_len(total_capacity) };
-
-            let mut str_spans = Vec::with_capacity(reference.len());
-            let mut cursor = 0;
-            for &n in strlens.iter() {
-                str_spans.push(Span::new(cursor, n));
-                cursor += n;
-            }
-
-            debug_assert_eq!(cursor, str_store_uninit.len());
-            debug_assert_eq!(str_spans.len(), reference.len());
-
-            let mut str_store_chunks = Vec::with_capacity(reference.len());
-            let mut remaining = &mut str_store_uninit[..];
-            for n in strlens {
-                let (chunk, rest) = remaining.split_at_mut(n);
-                str_store_chunks.push(chunk);
-                remaining = rest;
-            }
-
-            debug_assert_eq!(remaining.len(), 0);
-            debug_assert_eq!(str_store_chunks.len(), reference.len());
+            let mut str_store_uninit = prealloc_maybeuninit_vec(strlens.iter().sum());
+            let str_spans = get_disjoint_spans(&strlens);
+            let str_store_chunks = get_disjoint_chunks_mut(&strlens, &mut str_store_uninit[..]);
 
             reference
                 .par_iter()
@@ -188,24 +167,12 @@ impl CachedSymdel {
         let hash_builder = FixedState::with_seed(42);
 
         let (index_store, convergence_groups) = {
-            let num_del_variants = get_num_deletion_variants(reference, max_distance);
+            let num_vars_per_string = get_num_del_vars_per_string(reference, max_distance);
 
-            let total_capacity = num_del_variants.iter().sum();
-            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
-                Vec::with_capacity(total_capacity);
-            unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
-
-            let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> =
-                Vec::with_capacity(reference.len());
-            let mut remaining = &mut variant_index_pairs_uninit[..];
-            for n in num_del_variants {
-                let (chunk, rest) = remaining.split_at_mut(n);
-                vip_chunks.push(chunk);
-                remaining = rest;
-            }
-
-            debug_assert_eq!(remaining.len(), 0);
-            debug_assert_eq!(vip_chunks.len(), reference.len());
+            let mut variant_index_pairs_uninit =
+                prealloc_maybeuninit_vec(num_vars_per_string.iter().sum());
+            let vip_chunks =
+                get_disjoint_chunks_mut(&num_vars_per_string, &mut variant_index_pairs_uninit[..]);
 
             reference
                 .par_iter()
@@ -297,21 +264,12 @@ impl CachedSymdel {
         }
 
         let convergent_indices = {
-            let num_del_variants = get_num_deletion_variants(query, max_distance);
+            let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
 
-            let total_capacity = num_del_variants.iter().sum();
-            let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
-                Vec::with_capacity(total_capacity);
-            unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
-
-            let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> =
-                Vec::with_capacity(query.len());
-            let mut remaining = &mut variant_index_pairs_uninit[..];
-            for n in num_del_variants {
-                let (chunk, rest) = remaining.split_at_mut(n);
-                vip_chunks.push(chunk);
-                remaining = rest;
-            }
+            let mut variant_index_pairs_uninit =
+                prealloc_maybeuninit_vec(num_vars_per_string.iter().sum());
+            let vip_chunks =
+                get_disjoint_chunks_mut(&num_vars_per_string, &mut variant_index_pairs_uninit[..]);
 
             let hash_builder = FixedState::with_seed(42);
 
@@ -337,12 +295,10 @@ impl CachedSymdel {
                     let variant = &group[0].0;
                     match self.variant_map.get(variant) {
                         None => return,
-                        Some(indices_ref) => {
+                        Some(span) => {
                             let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                            convergent_indices.push((
-                                indices_query,
-                                self.get_convergent_indices_from_span(indices_ref),
-                            ));
+                            convergent_indices
+                                .push((indices_query, self.get_convergent_indices_from_span(span)));
                         }
                     }
                 });
@@ -371,25 +327,25 @@ impl CachedSymdel {
 
         let mut convergent_indices = Vec::new();
         if query.variant_map.len() < self.variant_map.len() {
-            query.variant_map.iter().for_each(|(variant, indices_q)| {
+            query.variant_map.iter().for_each(|(variant, span_q)| {
                 match self.variant_map.get(variant) {
                     None => return,
-                    Some(indices_ref) => {
+                    Some(span_r) => {
                         convergent_indices.push((
-                            query.get_convergent_indices_from_span(indices_q),
-                            self.get_convergent_indices_from_span(indices_ref),
+                            query.get_convergent_indices_from_span(span_q),
+                            self.get_convergent_indices_from_span(span_r),
                         ));
                     }
                 }
             });
         } else {
-            self.variant_map.iter().for_each(|(variant, indices_r)| {
+            self.variant_map.iter().for_each(|(variant, span_r)| {
                 match query.variant_map.get(variant) {
                     None => return,
-                    Some(indices_query) => {
+                    Some(span_q) => {
                         convergent_indices.push((
-                            query.get_convergent_indices_from_span(indices_query),
-                            self.get_convergent_indices_from_span(indices_r),
+                            query.get_convergent_indices_from_span(span_q),
+                            self.get_convergent_indices_from_span(span_r),
                         ));
                     }
                 }
@@ -512,23 +468,12 @@ impl CachedSymdel {
 
 pub fn get_candidates_within(query: &[String], max_distance: MaxDistance) -> Vec<(usize, usize)> {
     let (convergent_indices, group_sizes) = {
-        let num_del_variants = get_num_deletion_variants(query, max_distance);
+        let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
 
-        let total_capacity = num_del_variants.iter().sum();
-        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, usize)>> =
-            Vec::with_capacity(total_capacity);
-        unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
-
-        let mut vip_chunks: Vec<&mut [MaybeUninit<(u64, usize)>]> = Vec::with_capacity(query.len());
-        let mut remaining = &mut variant_index_pairs_uninit[..];
-        for n in num_del_variants {
-            let (chunk, rest) = remaining.split_at_mut(n);
-            vip_chunks.push(chunk);
-            remaining = rest;
-        }
-
-        debug_assert_eq!(remaining.len(), 0);
-        debug_assert_eq!(vip_chunks.len(), query.len());
+        let mut variant_index_pairs_uninit =
+            prealloc_maybeuninit_vec(num_vars_per_string.iter().sum());
+        let vip_chunks =
+            get_disjoint_chunks_mut(&num_vars_per_string, &mut variant_index_pairs_uninit[..]);
 
         let hash_builder = FixedState::with_seed(42);
 
@@ -591,14 +536,12 @@ pub fn get_candidates_cross(
     max_distance: MaxDistance,
 ) -> Vec<(usize, usize)> {
     let (convergent_indices, group_sizes) = {
-        let num_del_variants_q = get_num_deletion_variants(query, max_distance);
-        let num_del_variants_r = get_num_deletion_variants(reference, max_distance);
+        let num_del_variants_q = get_num_del_vars_per_string(query, max_distance);
+        let num_del_variants_r = get_num_del_vars_per_string(reference, max_distance);
 
         let total_capacity =
             num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
-        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, CrossIndex<usize>)>> =
-            Vec::with_capacity(total_capacity);
-        unsafe { variant_index_pairs_uninit.set_len(total_capacity) };
+        let mut variant_index_pairs_uninit = prealloc_maybeuninit_vec(total_capacity);
 
         let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossIndex<usize>)>]> =
             Vec::with_capacity(query.len());
@@ -706,7 +649,7 @@ pub fn get_candidates_cross(
     get_hit_candidates_from_cis_cross(&convergent_chunks)
 }
 
-fn get_num_deletion_variants(strings: &[String], max_distance: MaxDistance) -> Vec<usize> {
+fn get_num_del_vars_per_string(strings: &[String], max_distance: MaxDistance) -> Vec<usize> {
     strings
         .iter()
         .map(|s| {
@@ -827,48 +770,42 @@ fn write_vi_pairs_ci(
     }
 }
 
-/// Similar to the write_deletion_variants functions but instead of writing to slots in a slice,
-/// returns a vector containing the variants.
-fn get_del_var_hashes(
-    input: &str,
-    max_deletions: MaxDistance,
-    hash_builder: &impl BuildHasher,
-) -> Vec<u64> {
-    let input_length = input.len();
-
-    let mut deletion_variants = Vec::new();
-    deletion_variants.push(hash_string(input, hash_builder));
-
-    for num_deletions in 1..=max_deletions.as_u8() {
-        if num_deletions as usize > input_length {
-            deletion_variants.push(hash_string("", hash_builder));
-            break;
-        }
-
-        for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
-            let mut variant = String::with_capacity(input_length - num_deletions as usize);
-            let mut offset = 0;
-
-            for idx in deletion_indices.iter() {
-                variant.push_str(&input[offset..*idx]);
-                offset = idx + 1;
-            }
-            variant.push_str(&input[offset..input_length]);
-
-            deletion_variants.push(hash_string(variant, hash_builder));
-        }
-    }
-
-    deletion_variants.sort_unstable();
-    deletion_variants.dedup();
-
-    deletion_variants
-}
-
 fn hash_string(s: impl AsRef<[u8]>, hash_builder: &impl BuildHasher) -> u64 {
     let mut hasher = hash_builder.build_hasher();
     hasher.write(s.as_ref());
     hasher.finish()
+}
+
+fn prealloc_maybeuninit_vec<T>(total_capacity: usize) -> Vec<MaybeUninit<T>> {
+    let mut v: Vec<MaybeUninit<T>> = Vec::with_capacity(total_capacity);
+    unsafe { v.set_len(total_capacity) };
+    v
+}
+
+fn get_disjoint_spans(span_lens: &[usize]) -> Vec<Span> {
+    let mut spans = Vec::with_capacity(span_lens.len());
+    let mut cursor = 0;
+    for &n in span_lens {
+        spans.push(Span::new(cursor, n));
+        cursor += n;
+    }
+    spans
+}
+
+fn get_disjoint_chunks_mut<'a, T>(
+    chunk_lens: &[usize],
+    mut backing_memory: &'a mut [T],
+) -> Vec<&'a mut [T]> {
+    let mut chunks = Vec::with_capacity(chunk_lens.len());
+    for &n in chunk_lens {
+        let (chunk, rest) = backing_memory.split_at_mut(n);
+        chunks.push(chunk);
+        backing_memory = rest;
+    }
+
+    debug_assert_eq!(backing_memory.len(), 0);
+
+    chunks
 }
 
 unsafe fn cast_to_initialised_vec<T>(mut input: Vec<MaybeUninit<T>>) -> Vec<T> {
@@ -1075,45 +1012,8 @@ mod tests {
     #[test]
     fn test_get_num_vi_pairs() {
         let strings = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
-        let result = get_num_deletion_variants(&strings, MaxDistance(1));
+        let result = get_num_del_vars_per_string(&strings, MaxDistance(1));
         assert_eq!(result, vec![4, 4, 4]);
-    }
-
-    #[test]
-    fn test_get_deletion_variants() {
-        let hash_builder = FixedState::with_seed(42);
-
-        let variants = get_del_var_hashes("foo", MaxDistance(1), &hash_builder);
-        let mut expected = vec![
-            hash_string("fo", &hash_builder),
-            hash_string("foo", &hash_builder),
-            hash_string("oo", &hash_builder),
-        ];
-        expected.sort_unstable();
-        assert_eq!(variants, expected);
-
-        let variants = get_del_var_hashes("foo", MaxDistance(2), &hash_builder);
-        let mut expected = vec![
-            hash_string("f", &hash_builder),
-            hash_string("fo", &hash_builder),
-            hash_string("foo", &hash_builder),
-            hash_string("o", &hash_builder),
-            hash_string("oo", &hash_builder),
-        ];
-        expected.sort_unstable();
-        assert_eq!(variants, expected);
-
-        let variants = get_del_var_hashes("foo", MaxDistance(10), &hash_builder);
-        let mut expected = vec![
-            hash_string("", &hash_builder),
-            hash_string("f", &hash_builder),
-            hash_string("fo", &hash_builder),
-            hash_string("foo", &hash_builder),
-            hash_string("o", &hash_builder),
-            hash_string("oo", &hash_builder),
-        ];
-        expected.sort_unstable();
-        assert_eq!(variants, expected);
     }
 
     #[test]
