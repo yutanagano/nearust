@@ -1,6 +1,6 @@
 use _lib::{
     compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
-    CachedSymdel, MaxDistance,
+    get_true_hits, CachedSymdel, MaxDistance,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::Cursor;
@@ -59,6 +59,14 @@ fn setup_benchmarks(c: &mut Criterion) {
         let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
         b.iter(|| {
             let _ = compute_dists(&candidates, &query, &reference, mdist);
+        })
+    });
+
+    c.bench_function("get_true_hits", |b| {
+        let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
+        let dists = compute_dists(&candidates, &query, &reference, mdist);
+        b.iter(|| {
+            let _ = get_true_hits(&candidates, &dists, mdist, true);
         })
     });
 }

@@ -997,34 +997,35 @@ where
 
 /// Examine and double check hits to see if they are real
 pub fn get_true_hits(
-    hit_candidates: Vec<(usize, usize)>,
-    query: &[String],
-    reference: &[String],
+    hit_candidates: &[(usize, usize)],
+    dists: &[u8],
     max_distance: MaxDistance,
     zero_index: bool,
 ) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
-    let all_dists = compute_dists(&hit_candidates, query, reference, max_distance);
+    let mut qi_filtered = Vec::with_capacity(dists.len());
+    let mut ri_filtered = Vec::with_capacity(dists.len());
+    let mut dists_filtered = Vec::with_capacity(dists.len());
 
-    let mut q_indices = Vec::with_capacity(all_dists.len());
-    let mut ref_indices = Vec::with_capacity(all_dists.len());
-    let mut dists = Vec::with_capacity(all_dists.len());
-
-    for ((qi, ri), d) in hit_candidates.into_iter().zip(all_dists.into_iter()) {
+    for (&(qi, ri), &d) in hit_candidates.iter().zip(dists.iter()) {
         if d > max_distance.as_u8() {
             continue;
         }
         if zero_index {
-            q_indices.push(qi);
-            ref_indices.push(ri);
-            dists.push(d);
+            qi_filtered.push(qi);
+            ri_filtered.push(ri);
+            dists_filtered.push(d);
         } else {
-            q_indices.push(qi + 1);
-            ref_indices.push(ri + 1);
-            dists.push(d);
+            qi_filtered.push(qi + 1);
+            ri_filtered.push(ri + 1);
+            dists_filtered.push(d);
         }
     }
 
-    (q_indices, ref_indices, dists)
+    qi_filtered.shrink_to_fit();
+    ri_filtered.shrink_to_fit();
+    dists_filtered.shrink_to_fit();
+
+    (qi_filtered, ri_filtered, dists_filtered)
 }
 
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
@@ -1142,11 +1143,13 @@ mod tests {
         let query = bytes_as_ascii_lines(QUERY_BYTES);
 
         let candidates = get_candidates_within(&query, MaxDistance(1));
-        let results = get_true_hits(candidates, &query, &query, MaxDistance(1), false);
+        let dists = compute_dists(&candidates, &query, &query, MaxDistance(1));
+        let results = get_true_hits(&candidates, &dists, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
 
         let candidates = get_candidates_within(&query, MaxDistance(2));
-        let results = get_true_hits(candidates, &query, &query, MaxDistance(2), false);
+        let dists = compute_dists(&candidates, &query, &query, MaxDistance(2));
+        let results = get_true_hits(&candidates, &dists, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2))
     }
 
@@ -1157,12 +1160,14 @@ mod tests {
 
         let candidates =
             get_candidates_cross(&query, &reference, MaxDistance(1)).expect("valid inputs");
-        let results = get_true_hits(candidates, &query, &reference, MaxDistance(1), false);
+        let dists = compute_dists(&candidates, &query, &reference, MaxDistance(1));
+        let results = get_true_hits(&candidates, &dists, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
         let candidates =
             get_candidates_cross(&query, &reference, MaxDistance(2)).expect("valid inputs");
-        let results = get_true_hits(candidates, &query, &reference, MaxDistance(2), false);
+        let dists = compute_dists(&candidates, &query, &reference, MaxDistance(2));
+        let results = get_true_hits(&candidates, &dists, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2))
     }
 

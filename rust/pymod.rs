@@ -1,3 +1,5 @@
+use crate::compute_dists;
+
 use super::{get_candidates_cross, get_candidates_within, get_true_hits, MaxDistance};
 use numpy::IntoPyArray;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
@@ -98,9 +100,10 @@ fn symdel_within<'py>(
     check_strings_ascii(&query)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let hit_candidates = get_candidates_within(&query, max_distance);
+    let candidates = get_candidates_within(&query, max_distance);
+    let dists = compute_dists(&candidates, &query, &query, max_distance);
     let (q_indices, ref_indices, dists) =
-        get_true_hits(hit_candidates, &query, &query, max_distance, zero_index);
+        get_true_hits(&candidates, &dists, max_distance, zero_index);
 
     PyTuple::new(
         py,
@@ -124,10 +127,11 @@ fn symdel_cross<'py>(
     check_strings_ascii(&reference)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let hit_candidates =
+    let candidates =
         get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
+    let dists = compute_dists(&candidates, &query, &reference, max_distance);
     let (q_indices, ref_indices, dists) =
-        get_true_hits(hit_candidates, &query, &reference, max_distance, zero_index);
+        get_true_hits(&candidates, &dists, max_distance, zero_index);
 
     PyTuple::new(
         py,
