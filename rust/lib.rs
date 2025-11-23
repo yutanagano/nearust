@@ -8,7 +8,7 @@ use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufRead, Error, ErrorKind::InvalidData};
 use std::mem::MaybeUninit;
 use std::ops::{BitAnd, BitOr, Range};
-use std::{ptr, u8, usize};
+use std::{ptr, str, u8, usize};
 
 mod pymod;
 
