@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "nearust"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "clap 4.5.20",
  "criterion",
