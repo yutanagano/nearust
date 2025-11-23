@@ -1,10 +1,11 @@
 use _lib::{
-    get_candidates_cross, get_candidates_within, get_input_lines_as_ascii, write_true_results,
+    compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
+    MaxDistance,
 };
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::process;
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
@@ -93,34 +94,36 @@ fn main() {
                     process::exit(1);
                 });
 
+            let max_distance = MaxDistance::try_from(args.max_distance).unwrap_or_else(|e| {
+                eprintln!("{}", e);
+                process::exit(1)
+            });
+
             let hit_candidates =
-                get_candidates_cross(&primary_input, &comparison_input, args.max_distance)
-                    .unwrap_or_else(|e| {
-                        eprintln!("{}", e);
-                        process::exit(1)
-                    });
+                get_candidates_cross(&primary_input, &comparison_input, max_distance);
 
             write_true_results(
                 hit_candidates,
                 &primary_input,
                 &comparison_input,
-                args.max_distance,
+                max_distance,
                 args.zero_index,
                 &mut stdout,
             );
         }
         None => {
-            let hit_candidates = get_candidates_within(&primary_input, args.max_distance)
-                .unwrap_or_else(|e| {
-                    eprintln!("{}", e);
-                    process::exit(1);
-                });
+            let max_distance = MaxDistance::try_from(args.max_distance).unwrap_or_else(|e| {
+                eprintln!("{}", e);
+                process::exit(1)
+            });
+
+            let hit_candidates = get_candidates_within(&primary_input, max_distance);
 
             write_true_results(
                 hit_candidates,
                 &primary_input,
                 &primary_input,
-                args.max_distance,
+                max_distance,
                 args.zero_index,
                 &mut stdout,
             );
@@ -135,4 +138,118 @@ fn get_file_bufreader(path: &str) -> BufReader<File> {
         process::exit(1)
     });
     BufReader::new(file)
+}
+
+/// Write to stdout
+fn write_true_results(
+    hit_candidates: Vec<(usize, usize)>,
+    query: &[String],
+    reference: &[String],
+    max_distance: MaxDistance,
+    zero_index: bool,
+    writer: &mut impl Write,
+) {
+    let candidates_with_dists = compute_dists(hit_candidates, query, reference, max_distance);
+    for (q_idx, ref_idx, dist) in candidates_with_dists.iter() {
+        if *dist > max_distance.as_u8() {
+            continue;
+        }
+
+        if zero_index {
+            write!(writer, "{},{},{}\n", q_idx, ref_idx, dist).unwrap();
+        } else {
+            write!(writer, "{},{},{}\n", q_idx + 1, ref_idx + 1, dist).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use io::Cursor;
+
+    static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
+    static REFERENCE_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
+
+    fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
+        get_input_lines_as_ascii(Cursor::new(bytes)).expect("test files should be valid ASCII")
+    }
+
+    #[test]
+    fn test_within() {
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let dist_one = MaxDistance::try_from(1).expect("1 is valid MaxDistance");
+        let dist_two = MaxDistance::try_from(2).expect("2 is valid MaxDistance");
+        let mut test_output_stream = Vec::new();
+
+        let results = get_candidates_within(&query, dist_one);
+        write_true_results(
+            results,
+            &query,
+            &query,
+            dist_one,
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_a.txt")
+        );
+
+        test_output_stream.clear();
+
+        let results = get_candidates_within(&query, dist_two);
+        write_true_results(
+            results,
+            &query,
+            &query,
+            dist_two,
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_a_d2.txt")
+        )
+    }
+
+    #[test]
+    fn test_cross() {
+        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
+        let dist_one = MaxDistance::try_from(1).expect("1 is valid MaxDistance");
+        let dist_two = MaxDistance::try_from(2).expect("2 is valid MaxDistance");
+        let mut test_output_stream = Vec::new();
+
+        let results = get_candidates_cross(&query, &reference, dist_one);
+        write_true_results(
+            results,
+            &query,
+            &reference,
+            dist_one,
+            false,
+            &mut test_output_stream,
+        );
+
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_cross.txt")
+        );
+
+        test_output_stream.clear();
+
+        let results = get_candidates_cross(&query, &reference, dist_two);
+        write_true_results(
+            results,
+            &query,
+            &reference,
+            dist_two,
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(
+            test_output_stream,
+            include_bytes!("../test_files/results_10k_cross_d2.txt")
+        );
+    }
 }
