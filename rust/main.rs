@@ -153,9 +153,9 @@ fn write_true_results(
     zero_index: bool,
     writer: &mut impl Write,
 ) {
-    let candidates_with_dists = compute_dists(hit_candidates, query, reference, max_distance);
-    for (q_idx, ref_idx, dist) in candidates_with_dists.iter() {
-        if *dist > max_distance.as_u8() {
+    let dists = compute_dists(&hit_candidates, query, reference, max_distance);
+    for ((q_idx, ref_idx), dist) in hit_candidates.into_iter().zip(dists.into_iter()) {
+        if dist > max_distance.as_u8() {
             continue;
         }
 

@@ -58,7 +58,7 @@ fn setup_benchmarks(c: &mut Criterion) {
     c.bench_function("compute_dists", |b| {
         let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
         b.iter(|| {
-            let _ = compute_dists(candidates.clone(), &query, &reference, mdist);
+            let _ = compute_dists(&candidates, &query, &reference, mdist);
         })
     });
 }

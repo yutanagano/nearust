@@ -596,7 +596,7 @@ pub fn get_candidates_cross(
     reference: &[String],
     max_distance: MaxDistance,
 ) -> io::Result<Vec<(usize, usize)>> {
-    if query.len() > usize::TYPE_MASK {
+    if query.len() >= usize::TYPE_MASK {
         return Err(Error::new(
             InvalidData,
             format!(
@@ -607,7 +607,7 @@ pub fn get_candidates_cross(
         ));
     }
 
-    if reference.len() > usize::TYPE_MASK {
+    if reference.len() >= usize::TYPE_MASK {
         return Err(Error::new(
             InvalidData,
             format!(
@@ -1003,13 +1003,13 @@ pub fn get_true_hits(
     max_distance: MaxDistance,
     zero_index: bool,
 ) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
-    let candidates_with_dist = compute_dists(hit_candidates, query, reference, max_distance);
+    let all_dists = compute_dists(&hit_candidates, query, reference, max_distance);
 
-    let mut q_indices = Vec::with_capacity(candidates_with_dist.len());
-    let mut ref_indices = Vec::with_capacity(candidates_with_dist.len());
-    let mut dists = Vec::with_capacity(candidates_with_dist.len());
+    let mut q_indices = Vec::with_capacity(all_dists.len());
+    let mut ref_indices = Vec::with_capacity(all_dists.len());
+    let mut dists = Vec::with_capacity(all_dists.len());
 
-    for (qi, ri, d) in candidates_with_dist.into_iter() {
+    for ((qi, ri), d) in hit_candidates.into_iter().zip(all_dists.into_iter()) {
         if d > max_distance.as_u8() {
             continue;
         }
@@ -1052,21 +1052,19 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
 }
 
 pub fn compute_dists(
-    hit_candidates: Vec<(usize, usize)>,
+    hit_candidates: &[(usize, usize)],
     query: &[String],
     reference: &[String],
     max_distance: MaxDistance,
-) -> Vec<(usize, usize, u8)> {
+) -> Vec<u8> {
     hit_candidates
-        .into_par_iter()
+        .par_iter()
         .with_min_len(100000)
-        .map(|(idx_query, idx_reference)| {
-            let string_query = &query[idx_query];
-            let string_reference = &reference[idx_reference];
+        .map(|&(idx_query, idx_reference)| {
             let dist = {
                 match levenshtein::distance_with_args(
-                    string_query.bytes(),
-                    string_reference.bytes(),
+                    query[idx_query].bytes(),
+                    reference[idx_reference].bytes(),
                     &levenshtein::Args::default().score_cutoff(max_distance.as_usize()),
                 ) {
                     None => u8::MAX,
@@ -1074,7 +1072,7 @@ pub fn compute_dists(
                 }
             };
 
-            (idx_query, idx_reference, dist)
+            dist
         })
         .collect()
 }
