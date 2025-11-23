@@ -1306,46 +1306,105 @@ mod tests {
         assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_2);
     }
 
-    // #[test]
-    // fn test_within_cached() {
-    //     let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
-    //
-    //     let cached = CachedSymdel::new(&query, MaxDistance(2));
-    //     let results = cached.symdel_within(MaxDistance(1), false).unwrap();
-    //     assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
-    //
-    //     let results = cached.symdel_within(MaxDistance(2), false).unwrap();
-    //     assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2));
-    // }
-    //
-    // #[test]
-    // fn test_cross_cached() {
-    //     let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
-    //     let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-    //
-    //     let cached = CachedSymdel::new(&reference, MaxDistance(2));
-    //     let results = cached.symdel_cross(&query, MaxDistance(1), false).unwrap();
-    //     assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
-    //
-    //     let results = cached.symdel_cross(&query, MaxDistance(2), false).unwrap();
-    //     assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2));
-    // }
-    //
-    // #[test]
-    // fn test_cross_cached_against_cached() {
-    //     let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
-    //     let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-    //
-    //     let cached_query = CachedSymdel::new(&query, MaxDistance(2));
-    //     let cached_reference = CachedSymdel::new(&reference, MaxDistance(2));
-    //     let results = cached_reference
-    //         .symdel_cross_against_cached(&cached_query, MaxDistance(1), false)
-    //         .unwrap();
-    //     assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
-    //
-    //     let results = cached_reference
-    //         .symdel_cross_against_cached(&cached_query, MaxDistance(2), false)
-    //         .unwrap();
-    //     assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2));
-    // }
+    #[test]
+    fn test_within_cached() {
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let mut test_output_stream = Vec::new();
+
+        let cached = CachedSymdel::new(&query, MaxDistance(2));
+        let (candidates, dists) = cached
+            .get_candidates_within(MaxDistance(1))
+            .expect("legal max distance");
+        write_true_hits(
+            &candidates,
+            &dists,
+            MaxDistance(1),
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(test_output_stream, EXPECTED_BYTES_WITHIN_1);
+
+        test_output_stream.clear();
+
+        let (candidates, dists) = cached
+            .get_candidates_within(MaxDistance(2))
+            .expect("legal max distance");
+        write_true_hits(
+            &candidates,
+            &dists,
+            MaxDistance(2),
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(test_output_stream, EXPECTED_BYTES_WITHIN_2);
+    }
+
+    #[test]
+    fn test_cross_cached() {
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
+        let mut test_output_stream = Vec::new();
+
+        let cached = CachedSymdel::new(&reference, MaxDistance(2));
+        let (candidates, dists) = cached
+            .get_candidates_cross(&query, MaxDistance(1))
+            .expect("legal max distance");
+        write_true_hits(
+            &candidates,
+            &dists,
+            MaxDistance(1),
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_1);
+
+        test_output_stream.clear();
+
+        let (candidates, dists) = cached
+            .get_candidates_cross(&query, MaxDistance(2))
+            .expect("legal max distance");
+        write_true_hits(
+            &candidates,
+            &dists,
+            MaxDistance(2),
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_2);
+    }
+
+    #[test]
+    fn test_cross_cached_against_cached() {
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
+        let mut test_output_stream = Vec::new();
+
+        let cached_query = CachedSymdel::new(&query, MaxDistance(2));
+        let cached_reference = CachedSymdel::new(&reference, MaxDistance(2));
+        let (candidates, dists) = cached_reference
+            .get_candidates_cross_against_cached(&cached_query, MaxDistance(1))
+            .expect("legal max distance");
+        write_true_hits(
+            &candidates,
+            &dists,
+            MaxDistance(1),
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_1);
+
+        test_output_stream.clear();
+
+        let (candidates, dists) = cached_reference
+            .get_candidates_cross_against_cached(&cached_query, MaxDistance(2))
+            .expect("legal max distance");
+        write_true_hits(
+            &candidates,
+            &dists,
+            MaxDistance(2),
+            false,
+            &mut test_output_stream,
+        );
+        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_2);
+    }
 }
