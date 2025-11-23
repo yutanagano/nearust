@@ -144,9 +144,9 @@ pub struct CachedSymdel {
 }
 
 impl CachedSymdel {
-    pub fn new(reference: &[String], max_distance: MaxDistance) -> Self {
+    pub fn new(reference: &[impl AsRef<str> + Sync], max_distance: MaxDistance) -> Self {
         let (str_store, str_spans) = {
-            let strlens = reference.iter().map(|s| s.len()).collect_vec();
+            let strlens = reference.iter().map(|s| s.as_ref().len()).collect_vec();
 
             let mut str_store_uninit = prealloc_maybeuninit_vec(strlens.iter().sum());
             let str_spans = get_disjoint_spans(&strlens);
@@ -157,9 +157,13 @@ impl CachedSymdel {
                 .zip(str_store_chunks.into_par_iter())
                 .with_min_len(100000)
                 .for_each(|(s, chunk)| {
-                    debug_assert_eq!(s.len(), chunk.len());
+                    debug_assert_eq!(s.as_ref().len(), chunk.len());
                     unsafe {
-                        ptr::copy_nonoverlapping(s.as_ptr(), chunk.as_mut_ptr() as *mut u8, s.len())
+                        ptr::copy_nonoverlapping(
+                            s.as_ref().as_ptr(),
+                            chunk.as_mut_ptr() as *mut u8,
+                            s.as_ref().len(),
+                        )
                     };
                 });
 
@@ -184,7 +188,7 @@ impl CachedSymdel {
                 .enumerate()
                 .with_min_len(100000)
                 .for_each(|(idx, (s, chunk))| {
-                    write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                    write_vi_pairs_rawidx(s.as_ref(), idx, max_distance, chunk, &hash_builder);
                 });
 
             let mut variant_index_pairs =
@@ -259,7 +263,7 @@ impl CachedSymdel {
 
     pub fn symdel_cross(
         &self,
-        query: &[String],
+        query: &[impl AsRef<str> + Sync],
         max_distance: MaxDistance,
         zero_index: bool,
     ) -> io::Result<(Vec<usize>, Vec<usize>, Vec<u8>)> {
@@ -283,7 +287,7 @@ impl CachedSymdel {
                 .enumerate()
                 .with_min_len(100000)
                 .for_each(|(idx, (s, chunk))| {
-                    write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                    write_vi_pairs_rawidx(s.as_ref(), idx, max_distance, chunk, &hash_builder);
                 });
 
             let mut variant_index_pairs =
@@ -431,7 +435,7 @@ impl CachedSymdel {
     fn get_true_hits_partially_cached(
         &self,
         hit_candidates: Vec<(usize, usize)>,
-        query: &[String],
+        query: &[impl AsRef<str> + Sync],
         max_distance: MaxDistance,
         zero_index: bool,
     ) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
@@ -442,8 +446,10 @@ impl CachedSymdel {
                 let string_query = &query[idx_query];
                 let string_reference = self.get_str_at_index(idx_reference);
                 let dist = {
-                    let full_dist =
-                        levenshtein::distance(string_query.chars(), string_reference.chars());
+                    let full_dist = levenshtein::distance(
+                        string_query.as_ref().bytes(),
+                        string_reference.bytes(),
+                    );
                     if full_dist > max_distance.as_u8() as usize {
                         u8::MAX
                     } else {
@@ -527,7 +533,10 @@ impl CachedSymdel {
     }
 }
 
-pub fn get_candidates_within(query: &[String], max_distance: MaxDistance) -> Vec<(usize, usize)> {
+pub fn get_candidates_within(
+    query: &[impl AsRef<str> + Sync],
+    max_distance: MaxDistance,
+) -> Vec<(usize, usize)> {
     let (convergent_indices, group_sizes) = {
         let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
 
@@ -544,7 +553,7 @@ pub fn get_candidates_within(query: &[String], max_distance: MaxDistance) -> Vec
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
+                write_vi_pairs_rawidx(s.as_ref(), idx, max_distance, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs =
@@ -592,8 +601,8 @@ pub fn get_candidates_within(query: &[String], max_distance: MaxDistance) -> Vec
 }
 
 pub fn get_candidates_cross(
-    query: &[String],
-    reference: &[String],
+    query: &[impl AsRef<str> + Sync],
+    reference: &[impl AsRef<str> + Sync],
     max_distance: MaxDistance,
 ) -> io::Result<Vec<(usize, usize)>> {
     if query.len() >= usize::TYPE_MASK {
@@ -655,7 +664,7 @@ pub fn get_candidates_cross(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_ci(s, idx, max_distance, false, chunk, &hash_builder);
+                write_vi_pairs_ci(s.as_ref(), idx, max_distance, false, chunk, &hash_builder);
             });
         reference
             .par_iter()
@@ -663,7 +672,7 @@ pub fn get_candidates_cross(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_ci(s, idx, max_distance, true, chunk, &hash_builder);
+                write_vi_pairs_ci(s.as_ref(), idx, max_distance, true, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs =
@@ -732,16 +741,19 @@ pub fn get_candidates_cross(
     Ok(get_hit_candidates_from_cis_cross(&convergent_chunks))
 }
 
-fn get_num_del_vars_per_string(strings: &[String], max_distance: MaxDistance) -> Vec<usize> {
+fn get_num_del_vars_per_string(
+    strings: &[impl AsRef<str>],
+    max_distance: MaxDistance,
+) -> Vec<usize> {
     strings
         .iter()
         .map(|s| {
             let mut num_vars = 0;
             for k in 0..=max_distance.as_u8() {
-                if k as usize > s.len() {
+                if k as usize > s.as_ref().len() {
                     break;
                 }
-                num_vars += get_num_k_combs(s.len(), k);
+                num_vars += get_num_k_combs(s.as_ref().len(), k);
             }
             num_vars
         })
@@ -1021,8 +1033,8 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
 
 pub fn compute_dists(
     hit_candidates: &[(usize, usize)],
-    query: &[String],
-    reference: &[String],
+    query: &[impl AsRef<str> + Sync],
+    reference: &[impl AsRef<str> + Sync],
     max_distance: MaxDistance,
 ) -> Vec<u8> {
     hit_candidates
@@ -1031,8 +1043,8 @@ pub fn compute_dists(
         .map(|&(idx_query, idx_reference)| {
             let dist = {
                 match levenshtein::distance_with_args(
-                    query[idx_query].bytes(),
-                    reference[idx_reference].bytes(),
+                    query[idx_query].as_ref().bytes(),
+                    reference[idx_reference].as_ref().bytes(),
                     &levenshtein::Args::default().score_cutoff(max_distance.as_usize()),
                 ) {
                     None => u8::MAX,
