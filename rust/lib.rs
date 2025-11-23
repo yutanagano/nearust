@@ -263,7 +263,7 @@ impl CachedSymdel {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
         }
 
-        let convergent_indices = {
+        let (q_idx_store, convergence_groups) = {
             let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
 
             let mut variant_index_pairs_uninit =
@@ -275,10 +275,10 @@ impl CachedSymdel {
 
             query
                 .par_iter()
-                .enumerate()
                 .zip(vip_chunks.into_par_iter())
+                .enumerate()
                 .with_min_len(100000)
-                .for_each(|((idx, s), chunk)| {
+                .for_each(|(idx, (s, chunk))| {
                     write_vi_pairs_rawidx(s, idx, max_distance, chunk, &hash_builder);
                 });
 
@@ -288,25 +288,52 @@ impl CachedSymdel {
             variant_index_pairs.par_sort_unstable();
             variant_index_pairs.dedup();
 
-            let mut convergent_indices = Vec::new();
+            let mut total_num_convergent_q_indices = 0;
+            let mut num_convergence_groups = 0;
+
             variant_index_pairs
                 .chunk_by(|(v1, _), (v2, _)| v1 == v2)
-                .for_each(|group| {
-                    let variant = &group[0].0;
+                .for_each(|chunk| {
+                    let variant = &chunk[0].0;
                     match self.variant_map.get(variant) {
                         None => return,
-                        Some(span) => {
-                            let indices_query = group.iter().map(|&(_, idx)| idx).collect_vec();
-                            convergent_indices
-                                .push((indices_query, self.get_convergent_indices_from_span(span)));
+                        Some(_) => {
+                            total_num_convergent_q_indices += chunk.len();
+                            num_convergence_groups += 1;
                         }
                     }
                 });
 
-            convergent_indices
+            let mut q_idx_store = Vec::with_capacity(total_num_convergent_q_indices);
+            let mut convergence_groups = Vec::with_capacity(num_convergence_groups);
+            let mut cursor = 0;
+
+            variant_index_pairs
+                .chunk_by(|(v1, _), (v2, _)| v1 == v2)
+                .for_each(|chunk| {
+                    let variant = &chunk[0].0;
+                    match self.variant_map.get(variant) {
+                        None => return,
+                        Some(span) => {
+                            q_idx_store.extend(chunk.iter().map(|&(_, i)| i));
+                            convergence_groups.push((
+                                cursor..cursor + chunk.len(),
+                                self.get_convergent_indices_from_span(span),
+                            ));
+                            cursor += chunk.len();
+                        }
+                    }
+                });
+
+            (q_idx_store, convergence_groups)
         };
 
-        let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
+        let convergence_groups = convergence_groups
+            .into_iter()
+            .map(|(r, s)| (&q_idx_store[r], s))
+            .collect_vec();
+
+        let hit_candidates = get_hit_candidates_from_cis_cross(&convergence_groups);
 
         Ok(self.get_true_hits_partially_cached(hit_candidates, query, max_distance, zero_index))
     }
@@ -325,34 +352,64 @@ impl CachedSymdel {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance.as_u8(), query.max_distance.as_u8())));
         }
 
-        let mut convergent_indices = Vec::new();
-        if query.variant_map.len() < self.variant_map.len() {
+        let convergence_groups = if query.variant_map.len() < self.variant_map.len() {
+            let mut num_convergence_groups = 0;
+
+            query
+                .variant_map
+                .iter()
+                .for_each(|(variant, _)| match self.variant_map.get(variant) {
+                    None => return,
+                    Some(_) => {
+                        num_convergence_groups += 1;
+                    }
+                });
+
+            let mut convergence_groups = Vec::with_capacity(num_convergence_groups);
+
             query.variant_map.iter().for_each(|(variant, span_q)| {
                 match self.variant_map.get(variant) {
                     None => return,
                     Some(span_r) => {
-                        convergent_indices.push((
+                        convergence_groups.push((
                             query.get_convergent_indices_from_span(span_q),
                             self.get_convergent_indices_from_span(span_r),
                         ));
                     }
                 }
             });
+
+            convergence_groups
         } else {
+            let mut num_convergence_groups = 0;
+
+            self.variant_map
+                .iter()
+                .for_each(|(variant, _)| match query.variant_map.get(variant) {
+                    None => return,
+                    Some(_) => {
+                        num_convergence_groups += 1;
+                    }
+                });
+
+            let mut convergence_groups = Vec::with_capacity(num_convergence_groups);
+
             self.variant_map.iter().for_each(|(variant, span_r)| {
                 match query.variant_map.get(variant) {
                     None => return,
                     Some(span_q) => {
-                        convergent_indices.push((
+                        convergence_groups.push((
                             query.get_convergent_indices_from_span(span_q),
                             self.get_convergent_indices_from_span(span_r),
                         ));
                     }
                 }
             });
-        }
 
-        let hit_candidates = get_hit_candidates_from_cis_cross(&convergent_indices);
+            convergence_groups
+        };
+
+        let hit_candidates = get_hit_candidates_from_cis_cross(&convergence_groups);
 
         Ok(self.get_true_hits_fully_cached(hit_candidates, &query, max_distance, zero_index))
     }
