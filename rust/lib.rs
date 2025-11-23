@@ -1119,6 +1119,31 @@ mod tests {
     }
 
     #[test]
+    fn test_get_candidates_within_cached() {
+        let cached = CachedSymdel::new(&TEST_QUERY, MaxDistance(2));
+        let cases = [
+            (
+                MaxDistance(1),
+                (
+                    vec![(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (2, 3)],
+                    vec![1, 255, 255, 255, 1, 255, 255],
+                ),
+            ),
+            (
+                MaxDistance(2),
+                (
+                    vec![(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (2, 3)],
+                    vec![1, 2, 2, 255, 1, 255, 255],
+                ),
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = cached.get_candidates_within(mdist).expect("legal max dist");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
     fn test_get_candidates_cross() {
         let cases = [
             (MaxDistance(1), vec![(0, 2), (1, 2), (3, 2)]),
@@ -1139,6 +1164,88 @@ mod tests {
         ];
         for (mdist, expected) in cases {
             let result = get_candidates_cross(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_candidates_cross_partially_cached() {
+        let cached = CachedSymdel::new(&TEST_REF, MaxDistance(2));
+        let cases = [
+            (
+                MaxDistance(1),
+                (vec![(0, 2), (1, 2), (3, 2)], vec![0, 1, 255]),
+            ),
+            (
+                MaxDistance(2),
+                (
+                    vec![
+                        (0, 0),
+                        (0, 2),
+                        (1, 1),
+                        (1, 2),
+                        (2, 2),
+                        (3, 2),
+                        (4, 0),
+                        (4, 1),
+                        (4, 2),
+                    ],
+                    vec![2, 0, 255, 1, 2, 2, 255, 2, 255],
+                ),
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = cached
+                .get_candidates_cross(&TEST_QUERY, mdist)
+                .expect("legal max dist");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_candidates_cross_fully_cached() {
+        let cached_q = CachedSymdel::new(&TEST_QUERY, MaxDistance(2));
+        let cached_r = CachedSymdel::new(&TEST_REF, MaxDistance(2));
+        let cases = [
+            (
+                MaxDistance(1),
+                (
+                    vec![
+                        (0, 0),
+                        (0, 2),
+                        (1, 1),
+                        (1, 2),
+                        (2, 2),
+                        (3, 2),
+                        (4, 0),
+                        (4, 1),
+                        (4, 2),
+                    ],
+                    vec![255, 0, 255, 1, 255, 255, 255, 255, 255],
+                ),
+            ),
+            (
+                MaxDistance(2),
+                (
+                    vec![
+                        (0, 0),
+                        (0, 2),
+                        (1, 1),
+                        (1, 2),
+                        (2, 2),
+                        (3, 2),
+                        (4, 0),
+                        (4, 1),
+                        (4, 2),
+                    ],
+                    vec![2, 0, 255, 1, 2, 2, 255, 2, 255],
+                ),
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = cached_r
+                .get_candidates_cross_against_cached(&cached_q, mdist)
+                .expect("legal max dist");
             assert_eq!(result, expected);
         }
     }
@@ -1340,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cross_cached() {
+    fn test_cross_partially_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
         let mut test_output_stream = Vec::new();
@@ -1374,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cross_cached_against_cached() {
+    fn test_cross_fully_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
         let mut test_output_stream = Vec::new();
