@@ -1,9 +1,10 @@
 [build-system]
-requires = ["setuptools", "setuptools-rust", "setuptools-scm[simple]"]
+requires = ["setuptools", "setuptools-rust"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nearust"
+version = "0.6.0"
 requires-python = ">=3.10"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
@@ -31,7 +32,6 @@ classifiers = [
   "Topic :: Text Processing",
   "Topic :: Scientific/Engineering",
 ]
-dynamic = ["version"]
 dependencies = ["numpy~=2.3"]
 
 [project.optional-dependencies]
