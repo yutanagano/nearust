@@ -1,6 +1,6 @@
 use _lib::{
-    compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
-    CachedSymdel, MaxDistance,
+    collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within,
+    get_input_lines_as_ascii, CachedSymdel, MaxDistance,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::Cursor;
@@ -33,19 +33,19 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_within (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_within(mdist, true);
+            let _ = cached_reference.get_candidates_within(mdist);
         })
     });
 
     c.bench_function("get_candidates_cross (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross(&query, mdist, true);
+            let _ = cached_reference.get_candidates_cross(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross (cached-on-cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross_against_cached(&cached_query, mdist, true);
+            let _ = cached_reference.get_candidates_cross_against_cached(&cached_query, mdist);
         })
     });
 
@@ -58,7 +58,15 @@ fn setup_benchmarks(c: &mut Criterion) {
     c.bench_function("compute_dists", |b| {
         let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
         b.iter(|| {
-            let _ = compute_dists(candidates.clone(), &query, &reference, mdist);
+            let _ = compute_dists(&candidates, &query, &reference, mdist);
+        })
+    });
+
+    c.bench_function("get_true_hits", |b| {
+        let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
+        let dists = compute_dists(&candidates, &query, &reference, mdist);
+        b.iter(|| {
+            let _ = collect_true_hits(&candidates, &dists, mdist, true);
         })
     });
 }
