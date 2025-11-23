@@ -1058,7 +1058,7 @@ pub fn compute_dists(
 }
 
 /// Examine and double check hits to see if they are real
-pub fn get_true_hits(
+pub fn collect_true_hits(
     hit_candidates: &[(usize, usize)],
     dists: &[u8],
     max_distance: MaxDistance,
@@ -1091,7 +1091,7 @@ pub fn get_true_hits(
 }
 
 /// Write to stdout
-pub fn write_true_results(
+pub fn write_true_hits(
     hit_candidates: &[(usize, usize)],
     dists: &[u8],
     max_distance: MaxDistance,
@@ -1148,10 +1148,140 @@ mod tests {
         assert!(matches!(strings, Err(_)));
     }
 
+    const TEST_QUERY: [&str; 5] = ["fizz", "fuzz", "buzz", "izzy", "lofi"];
+    const TEST_REF: [&str; 3] = ["file", "tofu", "fizz"];
+
+    #[test]
+    fn test_get_candidates_within() {
+        let cases = [
+            (MaxDistance(1), vec![(0, 1), (0, 3), (1, 2)]),
+            (
+                MaxDistance(2),
+                vec![(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (2, 3)],
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = get_candidates_within(&TEST_QUERY, mdist);
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_candidates_cross() {
+        let cases = [
+            (MaxDistance(1), vec![(0, 2), (1, 2), (3, 2)]),
+            (
+                MaxDistance(2),
+                vec![
+                    (0, 0),
+                    (0, 2),
+                    (1, 1),
+                    (1, 2),
+                    (2, 2),
+                    (3, 2),
+                    (4, 0),
+                    (4, 1),
+                    (4, 2),
+                ],
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = get_candidates_cross(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_compute_dists() {
+        let cases = [
+            (
+                (0..5).tuple_combinations().collect_vec(),
+                &TEST_QUERY[..],
+                MaxDistance(1),
+                vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
+            ),
+            (
+                (0..5).tuple_combinations().collect_vec(),
+                &TEST_QUERY[..],
+                MaxDistance(2),
+                vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
+            ),
+            (
+                (0..5).cartesian_product(0..3).collect_vec(),
+                &TEST_REF[..],
+                MaxDistance(1),
+                vec![
+                    255, 255, 0, 255, 255, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+                ],
+            ),
+            (
+                (0..5).cartesian_product(0..3).collect_vec(),
+                &TEST_REF[..],
+                MaxDistance(2),
+                vec![
+                    2, 255, 0, 255, 255, 1, 255, 255, 2, 255, 255, 2, 255, 2, 255,
+                ],
+            ),
+        ];
+
+        for (candidates, reference, mdist, expected) in cases {
+            let results = compute_dists(&candidates, &TEST_QUERY, reference, mdist);
+            assert_eq!(results, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_true_hits() {
+        let cases = [
+            (
+                (0..5).tuple_combinations().collect_vec(),
+                vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
+                MaxDistance(1),
+                (vec![0, 1], vec![1, 2], vec![1, 1]),
+            ),
+            (
+                (0..5).tuple_combinations().collect_vec(),
+                vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
+                MaxDistance(2),
+                (vec![0, 0, 0, 1], vec![1, 2, 3, 2], vec![1, 2, 2, 1]),
+            ),
+        ];
+
+        for (candidates, dists, mdist, expected) in cases {
+            let result = collect_true_hits(&candidates, &dists, mdist, true);
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_write_true_hits() {
+        let cases = [
+            (
+                (0..5).tuple_combinations().collect_vec(),
+                vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
+                MaxDistance(1),
+                "0,1,1\n1,2,1\n",
+            ),
+            (
+                (0..5).tuple_combinations().collect_vec(),
+                vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
+                MaxDistance(2),
+                "0,1,1\n0,2,2\n0,3,2\n1,2,1\n",
+            ),
+        ];
+        let mut test_output_stream = Vec::new();
+
+        for (candidates, dists, mdist, expected) in cases {
+            write_true_hits(&candidates, &dists, mdist, true, &mut test_output_stream);
+            assert_eq!(test_output_stream, expected.as_bytes());
+            test_output_stream.clear();
+        }
+    }
+
     // testing on real world data
 
-    static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
-    static REFERENCE_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
+    static CDR3_Q_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
+    static CDR3_R_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
     static EXPECTED_BYTES_WITHIN_1: &[u8] = include_bytes!("../test_files/results_10k_a.txt");
     static EXPECTED_BYTES_WITHIN_2: &[u8] = include_bytes!("../test_files/results_10k_a_d2.txt");
     static EXPECTED_BYTES_CROSS_1: &[u8] = include_bytes!("../test_files/results_10k_cross.txt");
@@ -1184,40 +1314,40 @@ mod tests {
 
     #[test]
     fn test_within() {
-        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
 
         let candidates = get_candidates_within(&query, MaxDistance(1));
         let dists = compute_dists(&candidates, &query, &query, MaxDistance(1));
-        let results = get_true_hits(&candidates, &dists, MaxDistance(1), false);
+        let results = collect_true_hits(&candidates, &dists, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_1));
 
         let candidates = get_candidates_within(&query, MaxDistance(2));
         let dists = compute_dists(&candidates, &query, &query, MaxDistance(2));
-        let results = get_true_hits(&candidates, &dists, MaxDistance(2), false);
+        let results = collect_true_hits(&candidates, &dists, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_WITHIN_2))
     }
 
     #[test]
     fn test_cross() {
-        let query = bytes_as_ascii_lines(QUERY_BYTES);
-        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
 
         let candidates =
             get_candidates_cross(&query, &reference, MaxDistance(1)).expect("valid inputs");
         let dists = compute_dists(&candidates, &query, &reference, MaxDistance(1));
-        let results = get_true_hits(&candidates, &dists, MaxDistance(1), false);
+        let results = collect_true_hits(&candidates, &dists, MaxDistance(1), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_1));
 
         let candidates =
             get_candidates_cross(&query, &reference, MaxDistance(2)).expect("valid inputs");
         let dists = compute_dists(&candidates, &query, &reference, MaxDistance(2));
-        let results = get_true_hits(&candidates, &dists, MaxDistance(2), false);
+        let results = collect_true_hits(&candidates, &dists, MaxDistance(2), false);
         assert_eq!(results, bytes_as_coo(EXPECTED_BYTES_CROSS_2))
     }
 
     #[test]
     fn test_within_cached() {
-        let query = bytes_as_ascii_lines(QUERY_BYTES);
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
 
         let cached = CachedSymdel::new(&query, MaxDistance(2));
         let results = cached.symdel_within(MaxDistance(1), false).unwrap();
@@ -1229,8 +1359,8 @@ mod tests {
 
     #[test]
     fn test_cross_cached() {
-        let query = bytes_as_ascii_lines(QUERY_BYTES);
-        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
 
         let cached = CachedSymdel::new(&reference, MaxDistance(2));
         let results = cached.symdel_cross(&query, MaxDistance(1), false).unwrap();
@@ -1242,8 +1372,8 @@ mod tests {
 
     #[test]
     fn test_cross_cached_against_cached() {
-        let query = bytes_as_ascii_lines(QUERY_BYTES);
-        let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
+        let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
 
         let cached_query = CachedSymdel::new(&query, MaxDistance(2));
         let cached_reference = CachedSymdel::new(&reference, MaxDistance(2));

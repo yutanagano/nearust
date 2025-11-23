@@ -1,6 +1,6 @@
 use _lib::{
     compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
-    write_true_results, MaxDistance,
+    write_true_hits, MaxDistance,
 };
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
@@ -106,7 +106,7 @@ fn main() {
                 });
             let dists = compute_dists(&candidates, &primary_input, &comparison_input, max_distance);
 
-            write_true_results(
+            write_true_hits(
                 &candidates,
                 &dists,
                 max_distance,
@@ -123,7 +123,7 @@ fn main() {
             let candidates = get_candidates_within(&primary_input, max_distance);
             let dists = compute_dists(&candidates, &primary_input, &primary_input, max_distance);
 
-            write_true_results(
+            write_true_hits(
                 &candidates,
                 &dists,
                 max_distance,

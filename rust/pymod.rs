@@ -1,6 +1,6 @@
 use crate::compute_dists;
 
-use super::{get_candidates_cross, get_candidates_within, get_true_hits, MaxDistance};
+use super::{collect_true_hits, get_candidates_cross, get_candidates_within, MaxDistance};
 use numpy::IntoPyArray;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
 use std::usize;
@@ -103,7 +103,7 @@ fn symdel_within<'py>(
     let candidates = get_candidates_within(&query, max_distance);
     let dists = compute_dists(&candidates, &query, &query, max_distance);
     let (q_indices, ref_indices, dists) =
-        get_true_hits(&candidates, &dists, max_distance, zero_index);
+        collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
     PyTuple::new(
         py,
@@ -131,7 +131,7 @@ fn symdel_cross<'py>(
         get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
     let dists = compute_dists(&candidates, &query, &reference, max_distance);
     let (q_indices, ref_indices, dists) =
-        get_true_hits(&candidates, &dists, max_distance, zero_index);
+        collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
     PyTuple::new(
         py,
