@@ -100,7 +100,11 @@ fn main() {
             });
 
             let hit_candidates =
-                get_candidates_cross(&primary_input, &comparison_input, max_distance);
+                get_candidates_cross(&primary_input, &comparison_input, max_distance)
+                    .unwrap_or_else(|e| {
+                        eprintln!("{}", e);
+                        process::exit(1)
+                    });
 
             write_true_results(
                 hit_candidates,
@@ -221,7 +225,7 @@ mod tests {
         let dist_two = MaxDistance::try_from(2).expect("2 is valid MaxDistance");
         let mut test_output_stream = Vec::new();
 
-        let results = get_candidates_cross(&query, &reference, dist_one);
+        let results = get_candidates_cross(&query, &reference, dist_one).expect("valid inputs");
         write_true_results(
             results,
             &query,
@@ -238,7 +242,7 @@ mod tests {
 
         test_output_stream.clear();
 
-        let results = get_candidates_cross(&query, &reference, dist_two);
+        let results = get_candidates_cross(&query, &reference, dist_two).expect("valid inputs");
         write_true_results(
             results,
             &query,
