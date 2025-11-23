@@ -1,6 +1,6 @@
-use crate::compute_dists;
-
-use super::{collect_true_hits, get_candidates_cross, get_candidates_within, MaxDistance};
+use super::{
+    collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within, MaxDistance,
+};
 use numpy::IntoPyArray;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
 use std::usize;
@@ -27,17 +27,19 @@ impl CachedSymdel {
         zero_index: bool,
     ) -> PyResult<Bound<'py, PyTuple>> {
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let (q_indices, ref_indices, dists) = self
+        let (candidates, dists) = self
             .internal
-            .symdel_within(max_distance, zero_index)
+            .get_candidates_within(max_distance)
             .map_err(PyValueError::new_err)?;
+        let (qi, ri, filtered_dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
         PyTuple::new(
             py,
             &[
-                q_indices.into_pyarray(py).as_any(),
-                ref_indices.into_pyarray(py).as_any(),
-                dists.into_pyarray(py).as_any(),
+                qi.into_pyarray(py).as_any(),
+                ri.into_pyarray(py).as_any(),
+                filtered_dists.into_pyarray(py).as_any(),
             ],
         )
     }
@@ -51,17 +53,19 @@ impl CachedSymdel {
     ) -> PyResult<Bound<'py, PyTuple>> {
         check_strings_ascii(&query)?;
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let (q_indices, ref_indices, dists) = self
+        let (candidates, dists) = self
             .internal
-            .symdel_cross(&query, max_distance, zero_index)
+            .get_candidates_cross(&query, max_distance)
             .map_err(PyValueError::new_err)?;
+        let (qi, ri, filtered_dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
         PyTuple::new(
             py,
             &[
-                q_indices.into_pyarray(py).as_any(),
-                ref_indices.into_pyarray(py).as_any(),
-                dists.into_pyarray(py).as_any(),
+                qi.into_pyarray(py).as_any(),
+                ri.into_pyarray(py).as_any(),
+                filtered_dists.into_pyarray(py).as_any(),
             ],
         )
     }
@@ -74,17 +78,19 @@ impl CachedSymdel {
         zero_index: bool,
     ) -> PyResult<Bound<'py, PyTuple>> {
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let (q_indices, ref_indices, dists) = self
+        let (candidates, dists) = self
             .internal
-            .symdel_cross_against_cached(&query.internal, max_distance, zero_index)
+            .get_candidates_cross_against_cached(&query.internal, max_distance)
             .map_err(PyValueError::new_err)?;
+        let (qi, ri, filtered_dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
         PyTuple::new(
             py,
             &[
-                q_indices.into_pyarray(py).as_any(),
-                ref_indices.into_pyarray(py).as_any(),
-                dists.into_pyarray(py).as_any(),
+                qi.into_pyarray(py).as_any(),
+                ri.into_pyarray(py).as_any(),
+                filtered_dists.into_pyarray(py).as_any(),
             ],
         )
     }

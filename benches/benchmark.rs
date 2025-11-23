@@ -33,19 +33,19 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_within (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_within(mdist, true);
+            let _ = cached_reference.get_candidates_within(mdist);
         })
     });
 
     c.bench_function("get_candidates_cross (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross(&query, mdist, true);
+            let _ = cached_reference.get_candidates_cross(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross (cached-on-cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross_against_cached(&cached_query, mdist, true);
+            let _ = cached_reference.get_candidates_cross_against_cached(&cached_query, mdist);
         })
     });
 
