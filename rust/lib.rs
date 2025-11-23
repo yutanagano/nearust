@@ -92,6 +92,18 @@ mod utils {
     }
 }
 
+pub trait Integer: Copy + Sized + Send + Ord + Sync {
+    const MAX_INDEXABLE_LEN: usize;
+    unsafe fn from_usize(input: usize) -> Self;
+}
+
+impl Integer for usize {
+    const MAX_INDEXABLE_LEN: usize = usize::MAX;
+    unsafe fn from_usize(input: usize) -> Self {
+        input
+    }
+}
+
 #[derive(Default)]
 struct IdentityHasher(u64);
 
@@ -494,14 +506,28 @@ impl CachedSymdel {
     }
 }
 
-pub fn get_candidates_within(
+pub fn get_candidates_within<T>(
     query: &[impl AsRef<str> + Sync],
     max_distance: MaxDistance,
-) -> Vec<(usize, usize)> {
+) -> io::Result<Vec<(T, T)>>
+where
+    T: Integer,
+{
+    if query.len() > T::MAX_INDEXABLE_LEN {
+        return Err(Error::new(
+            InvalidData,
+            format!(
+                "query must not have more than {} elements, got {}",
+                T::MAX_INDEXABLE_LEN,
+                query.len(),
+            ),
+        ));
+    }
+
     let (convergent_indices, group_sizes) = {
         let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
 
-        let mut variant_index_pairs_uninit =
+        let mut variant_index_pairs_uninit: Vec<MaybeUninit<(u64, T)>> =
             prealloc_maybeuninit_vec(num_vars_per_string.iter().sum());
         let vip_chunks =
             get_disjoint_chunks_mut(&num_vars_per_string, &mut variant_index_pairs_uninit[..]);
@@ -514,7 +540,13 @@ pub fn get_candidates_within(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_rawidx(s.as_ref(), idx, max_distance, chunk, &hash_builder);
+                write_vi_pairs_rawidx(
+                    s.as_ref(),
+                    unsafe { T::from_usize(idx) },
+                    max_distance,
+                    chunk,
+                    &hash_builder,
+                );
             });
 
         let mut variant_index_pairs =
@@ -558,7 +590,7 @@ pub fn get_candidates_within(
 
     debug_assert_eq!(remaining.len(), 0);
 
-    get_hit_candidates_from_cis_within(&convergent_chunks)
+    Ok(get_hit_candidates_from_cis_within(&convergent_chunks))
 }
 
 pub fn get_candidates_cross(
@@ -570,8 +602,8 @@ pub fn get_candidates_cross(
         return Err(Error::new(
             InvalidData,
             format!(
-                "query must not have more than {} elements, got {}",
-                usize::TYPE_MASK - 1,
+                "query must be shorter than {} elements, got {}",
+                usize::TYPE_MASK,
                 query.len(),
             ),
         ));
@@ -581,8 +613,8 @@ pub fn get_candidates_cross(
         return Err(Error::new(
             InvalidData,
             format!(
-                "reference must not have more than {} elements, got {}",
-                usize::TYPE_MASK - 1,
+                "reference must be shorter than {} elements, got {}",
+                usize::TYPE_MASK,
                 query.len(),
             ),
         ));
@@ -738,13 +770,15 @@ fn get_num_k_combs(n: usize, k: u8) -> usize {
 /// Given an input string and its index in the original input vector, generate all possible strings
 /// after making at most max_deletions single-character deletions, compute their hash, and write
 /// them into the slots in the provided chunk, as 2-tuples (hash, input_idx).
-fn write_vi_pairs_rawidx(
+fn write_vi_pairs_rawidx<T>(
     input: &str,
-    input_idx: usize,
+    input_idx: T,
     max_deletions: MaxDistance,
-    chunk: &mut [MaybeUninit<(u64, usize)>],
+    chunk: &mut [MaybeUninit<(u64, T)>],
     hash_builder: &impl BuildHasher,
-) {
+) where
+    T: Copy,
+{
     let input_length = input.len();
 
     chunk[0].write((hash_string(input, hash_builder), input_idx));
@@ -872,9 +906,10 @@ unsafe fn cast_to_initialised_vec<T>(mut input: Vec<MaybeUninit<T>>) -> Vec<T> {
     Vec::from_raw_parts(ptr, len, cap)
 }
 
-fn get_hit_candidates_from_cis_within<T>(convergent_indices: &[T]) -> Vec<(usize, usize)>
+fn get_hit_candidates_from_cis_within<T, U>(convergent_indices: &[T]) -> Vec<(U, U)>
 where
-    T: AsRef<[usize]> + Sync,
+    T: AsRef<[U]> + Sync,
+    U: Integer,
 {
     let num_hit_candidates = convergent_indices
         .iter()
@@ -882,11 +917,10 @@ where
         .collect_vec();
 
     let total_capacity = num_hit_candidates.iter().sum();
-    let mut hit_candidates_uninit: Vec<MaybeUninit<(usize, usize)>> =
-        Vec::with_capacity(total_capacity);
+    let mut hit_candidates_uninit: Vec<MaybeUninit<(U, U)>> = Vec::with_capacity(total_capacity);
     unsafe { hit_candidates_uninit.set_len(total_capacity) };
 
-    let mut hc_chunks: Vec<&mut [MaybeUninit<(usize, usize)>]> =
+    let mut hc_chunks: Vec<&mut [MaybeUninit<(U, U)>]> =
         Vec::with_capacity(convergent_indices.len());
     let mut remaining = &mut hit_candidates_uninit[..];
     for n in num_hit_candidates {
@@ -1126,7 +1160,7 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = get_candidates_within(&TEST_QUERY, mdist);
+            let result = get_candidates_within(&TEST_QUERY, mdist).expect("short input");
             assert_eq!(result, expected);
         }
     }
@@ -1369,19 +1403,16 @@ mod tests {
     #[test]
     fn test_within() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
+        let mdist_one = MaxDistance::try_from(1).expect("legal");
+        let mdist_two = MaxDistance::try_from(2).expect("legal");
         let mut test_output_stream = Vec::new();
 
-        let candidates = get_candidates_within(&query, MaxDistance::try_from(1).expect("legal"));
-        let dists = compute_dists(
-            &candidates,
-            &query,
-            &query,
-            MaxDistance::try_from(1).expect("legal"),
-        );
+        let candidates = get_candidates_within(&query, mdist_one).expect("short input");
+        let dists = compute_dists(&candidates, &query, &query, mdist_one);
         write_true_hits(
             &candidates,
             &dists,
-            MaxDistance::try_from(1).expect("legal"),
+            mdist_one,
             false,
             &mut test_output_stream,
         );
@@ -1389,17 +1420,12 @@ mod tests {
 
         test_output_stream.clear();
 
-        let candidates = get_candidates_within(&query, MaxDistance::try_from(2).expect("legal"));
-        let dists = compute_dists(
-            &candidates,
-            &query,
-            &query,
-            MaxDistance::try_from(2).expect("legal"),
-        );
+        let candidates = get_candidates_within(&query, mdist_two).expect("short input");
+        let dists = compute_dists(&candidates, &query, &query, mdist_two);
         write_true_hits(
             &candidates,
             &dists,
-            MaxDistance::try_from(2).expect("legal"),
+            mdist_two,
             false,
             &mut test_output_stream,
         );

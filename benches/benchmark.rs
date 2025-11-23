@@ -21,7 +21,7 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
-            let _ = get_candidates_within(&query, mdist);
+            let _ = get_candidates_within::<usize>(&query, mdist);
         })
     });
 
