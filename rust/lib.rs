@@ -1061,7 +1061,7 @@ pub fn compute_dists(
             let string_reference = &reference[idx_reference];
             let dist = {
                 let full_dist =
-                    levenshtein::distance(string_query.chars(), string_reference.chars());
+                    levenshtein::distance(string_query.bytes(), string_reference.bytes());
                 if full_dist > max_distance.as_u8() as usize {
                     u8::MAX
                 } else {
