@@ -1231,7 +1231,7 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = get_candidates_within::<usize>(&TEST_QUERY, mdist).expect("short input");
+            let result = get_candidates_within::<u32>(&TEST_QUERY, mdist).expect("short input");
             assert_eq!(result, expected);
         }
     }
@@ -1285,7 +1285,7 @@ mod tests {
         ];
         for (mdist, expected) in cases {
             let result =
-                get_candidates_cross::<usize>(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
+                get_candidates_cross::<u32>(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
             assert_eq!(result, expected);
         }
     }
@@ -1406,7 +1406,7 @@ mod tests {
         ];
 
         for (candidates, reference, mdist, expected) in cases {
-            let results = compute_dists::<usize>(&candidates, &TEST_QUERY, reference, mdist);
+            let results = compute_dists::<u32>(&candidates, &TEST_QUERY, reference, mdist);
             assert_eq!(results, expected);
         }
     }
@@ -1429,7 +1429,7 @@ mod tests {
         ];
 
         for (candidates, dists, mdist, expected) in cases {
-            let result = collect_true_hits::<usize>(&candidates, &dists, mdist, true);
+            let result = collect_true_hits::<u32>(&candidates, &dists, mdist, true);
             assert_eq!(result, expected);
         }
     }
@@ -1453,7 +1453,7 @@ mod tests {
         let mut test_output_stream = Vec::new();
 
         for (candidates, dists, mdist, expected) in cases {
-            write_true_hits::<usize>(&candidates, &dists, mdist, true, &mut test_output_stream);
+            write_true_hits::<u32>(&candidates, &dists, mdist, true, &mut test_output_stream);
             assert_eq!(test_output_stream, expected.as_bytes());
             test_output_stream.clear();
         }
@@ -1479,7 +1479,7 @@ mod tests {
         let mdist_two = MaxDistance::try_from(2).expect("legal");
         let mut test_output_stream = Vec::new();
 
-        let candidates = get_candidates_within::<usize>(&query, mdist_one).expect("short input");
+        let candidates = get_candidates_within::<u32>(&query, mdist_one).expect("short input");
         let dists = compute_dists(&candidates, &query, &query, mdist_one);
         write_true_hits(
             &candidates,
@@ -1492,7 +1492,7 @@ mod tests {
 
         test_output_stream.clear();
 
-        let candidates = get_candidates_within::<usize>(&query, mdist_two).expect("short input");
+        let candidates = get_candidates_within::<u32>(&query, mdist_two).expect("short input");
         let dists = compute_dists(&candidates, &query, &query, mdist_two);
         write_true_hits(
             &candidates,
@@ -1510,7 +1510,7 @@ mod tests {
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
         let mut test_output_stream = Vec::new();
 
-        let candidates = get_candidates_cross::<usize>(
+        let candidates = get_candidates_cross::<u32>(
             &query,
             &reference,
             MaxDistance::try_from(1).expect("legal"),
@@ -1533,7 +1533,7 @@ mod tests {
 
         test_output_stream.clear();
 
-        let candidates = get_candidates_cross::<usize>(
+        let candidates = get_candidates_cross::<u32>(
             &query,
             &reference,
             MaxDistance::try_from(2).expect("legal"),
