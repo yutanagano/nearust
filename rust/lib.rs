@@ -1,6 +1,7 @@
 use foldhash::fast::FixedState;
 use hashbrown::HashMap;
 use itertools::Itertools;
+use num_traits::AsPrimitive;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
 use std::hash::{BuildHasher, Hasher};
@@ -14,9 +15,9 @@ pub use utils::{Integer, MaxDistance};
 mod pymod;
 
 mod utils {
+    use num_traits::{AsPrimitive, PrimInt};
     use std::fmt::{Debug, Display};
     use std::io::{Error, ErrorKind::InvalidData};
-    use std::ops::{BitAnd, BitOr};
 
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
     pub struct MaxDistance(u8);
@@ -47,24 +48,12 @@ mod utils {
     }
 
     pub trait Integer:
-        Copy
-        + Sized
-        + Send
-        + Ord
-        + Sync
-        + BitAnd<Output = Self>
-        + BitOr<Output = Self>
-        + PartialEq
-        + Debug
-        + Display
+        PrimInt + Debug + 'static + Sync + Send + AsPrimitive<usize> + Display
     {
         const TYPE_MASK: Self;
         const VALUE_MASK: Self;
         const MAX_INDEXABLE_LEN_RAW: usize;
         const MAX_INDEXABLE_LEN_CROSS: usize;
-        unsafe fn from_usize(input: usize) -> Self;
-        unsafe fn to_usize(self) -> usize;
-        unsafe fn increment(self) -> Self;
     }
 
     impl Integer for usize {
@@ -72,15 +61,6 @@ mod utils {
         const VALUE_MASK: Self = !Self::TYPE_MASK;
         const MAX_INDEXABLE_LEN_RAW: usize = usize::MAX;
         const MAX_INDEXABLE_LEN_CROSS: usize = Self::TYPE_MASK - 1;
-        unsafe fn from_usize(input: usize) -> Self {
-            input
-        }
-        unsafe fn to_usize(self) -> usize {
-            self
-        }
-        unsafe fn increment(self) -> Self {
-            self + 1
-        }
     }
 
     impl Integer for u64 {
@@ -88,15 +68,6 @@ mod utils {
         const VALUE_MASK: Self = !Self::TYPE_MASK;
         const MAX_INDEXABLE_LEN_RAW: usize = u64::MAX as usize;
         const MAX_INDEXABLE_LEN_CROSS: usize = (Self::TYPE_MASK - 1) as usize;
-        unsafe fn from_usize(input: usize) -> Self {
-            input as u64
-        }
-        unsafe fn to_usize(self) -> usize {
-            self as usize
-        }
-        unsafe fn increment(self) -> Self {
-            self + 1
-        }
     }
 
     impl Integer for u32 {
@@ -104,15 +75,6 @@ mod utils {
         const VALUE_MASK: Self = !Self::TYPE_MASK;
         const MAX_INDEXABLE_LEN_RAW: usize = u32::MAX as usize;
         const MAX_INDEXABLE_LEN_CROSS: usize = (Self::TYPE_MASK - 1) as usize;
-        unsafe fn from_usize(input: usize) -> Self {
-            input as u32
-        }
-        unsafe fn to_usize(self) -> usize {
-            self as usize
-        }
-        unsafe fn increment(self) -> Self {
-            self + 1
-        }
     }
 
     #[derive(Clone, Copy, PartialEq)]
@@ -547,6 +509,7 @@ pub fn get_candidates_within<T>(
 ) -> io::Result<Vec<(T, T)>>
 where
     T: Integer,
+    usize: AsPrimitive<T>,
 {
     if query.len() > T::MAX_INDEXABLE_LEN_RAW {
         return Err(Error::new(
@@ -575,13 +538,7 @@ where
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_rawidx(
-                    s.as_ref(),
-                    unsafe { T::from_usize(idx) },
-                    max_distance,
-                    chunk,
-                    &hash_builder,
-                );
+                write_vi_pairs_rawidx(s.as_ref(), idx.as_(), max_distance, chunk, &hash_builder);
             });
 
         let mut variant_index_pairs =
@@ -635,6 +592,7 @@ pub fn get_candidates_cross<T>(
 ) -> io::Result<Vec<(T, T)>>
 where
     T: Integer,
+    usize: AsPrimitive<T>,
 {
     if query.len() > T::MAX_INDEXABLE_LEN_CROSS {
         return Err(Error::new(
@@ -697,7 +655,7 @@ where
             .for_each(|(idx, (s, chunk))| {
                 write_vi_pairs_ci(
                     s.as_ref(),
-                    unsafe { T::from_usize(idx) },
+                    idx.as_(),
                     max_distance,
                     false,
                     chunk,
@@ -712,7 +670,7 @@ where
             .for_each(|(idx, (s, chunk))| {
                 write_vi_pairs_ci(
                     s.as_ref(),
-                    unsafe { T::from_usize(idx) },
+                    idx.as_(),
                     max_distance,
                     true,
                     chunk,
@@ -1095,10 +1053,8 @@ where
         .map(|&(idx_query, idx_reference)| {
             let dist = {
                 match levenshtein::distance_with_args(
-                    query[unsafe { idx_query.to_usize() }].as_ref().bytes(),
-                    reference[unsafe { idx_reference.to_usize() }]
-                        .as_ref()
-                        .bytes(),
+                    query[idx_query.as_()].as_ref().bytes(),
+                    reference[idx_reference.as_()].as_ref().bytes(),
                     &levenshtein::Args::default().score_cutoff(max_distance.as_usize()),
                 ) {
                     None => u8::MAX,
@@ -1134,8 +1090,8 @@ where
             ri_filtered.push(ri);
             dists_filtered.push(d);
         } else {
-            qi_filtered.push(unsafe { qi.increment() });
-            ri_filtered.push(unsafe { ri.increment() });
+            qi_filtered.push(qi + T::one());
+            ri_filtered.push(ri + T::one());
             dists_filtered.push(d);
         }
     }
@@ -1165,14 +1121,7 @@ pub fn write_true_hits<T>(
         if zero_index {
             write!(writer, "{},{},{}\n", qi, ri, d).unwrap();
         } else {
-            write!(
-                writer,
-                "{},{},{}\n",
-                unsafe { qi.increment() },
-                unsafe { ri.increment() },
-                d
-            )
-            .unwrap();
+            write!(writer, "{},{},{}\n", qi + T::one(), ri + T::one(), d).unwrap();
         }
     }
 }
