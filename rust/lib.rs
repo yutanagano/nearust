@@ -8,8 +8,8 @@ use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::{ptr, str, u8, usize};
-pub use utils::MaxDistance;
-use utils::{CrossIndex, Integer};
+use utils::CrossIndex;
+pub use utils::{Integer, MaxDistance};
 
 mod pymod;
 
