@@ -4,17 +4,6 @@ echo "NOTE: make sure you are running this shell script from outside the Python 
 echo "Building CLI binary..."
 RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
 
-echo "Building Python package..."
-source ./.venv/bin/activate
-pip install .[dev]
-
-CURRENT_COMMIT=$(python ./profiling/scripts/get_version.py)
-REPEATS=5
-
-if [ ! -d "profiling/results" ]; then
-  mkdir "profiling/results"
-fi
-
 mean=0
 sem=0
 function compute_mean_sem {
@@ -35,6 +24,7 @@ function compute_mean_sem {
   sem=$(echo "$std / sqrt($len_vals)" | bc -l)
 }
 
+REPEATS=5
 function basic_benchmarking {
   local time_s_array=()
   local mem_kb_array=()
@@ -68,7 +58,7 @@ function basic_benchmarking {
 }
 
 echo "Profiling within-set symdel..."
-echo "$(basic_benchmarking "./target/release/nearust ./test_files/cdr3b_1m_a.txt")" > "./profiling/results/basic.within.${CURRENT_COMMIT}"
+basic_benchmarking "./target/release/nearust ./test_files/cdr3b_1m_a.txt"
 
 echo "Profiling cross-set symdel..."
-echo "$(basic_benchmarking "./target/release/nearust ./test_files/cdr3b_1m_a.txt ./test_files/cdr3b_1m_b.txt")" > "./profiling/results/basic.cross.${CURRENT_COMMIT}"
+basic_benchmarking "./target/release/nearust ./test_files/cdr3b_1m_a.txt ./test_files/cdr3b_1m_b.txt"
