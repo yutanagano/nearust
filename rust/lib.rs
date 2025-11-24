@@ -4,6 +4,7 @@ use itertools::Itertools;
 use num_traits::AsPrimitive;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
+use std::any::type_name;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
 use std::mem::MaybeUninit;
@@ -170,7 +171,22 @@ where
     T: Integer,
     usize: AsPrimitive<T>,
 {
-    pub fn new(reference: &[impl AsRef<str> + Sync], max_distance: MaxDistance) -> Self {
+    pub fn new(
+        reference: &[impl AsRef<str> + Sync],
+        max_distance: MaxDistance,
+    ) -> io::Result<Self> {
+        if reference.len() > T::MAX_INDEXABLE_LEN_RAW {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "for storage type {}, reference must not have more than {} elements, got {}",
+                    type_name::<T>(),
+                    T::MAX_INDEXABLE_LEN_RAW,
+                    reference.len(),
+                ),
+            ));
+        }
+
         let (str_store, str_spans) = {
             let strlens = reference.iter().map(|s| s.as_ref().len()).collect_vec();
 
@@ -262,13 +278,13 @@ where
             variant_map.entry(v_hash).insert(index_range);
         }
 
-        CachedSymdel {
+        Ok(CachedSymdel {
             str_store,
             str_spans,
             index_store,
             variant_map,
             max_distance,
-        }
+        })
     }
 
     pub fn get_candidates_within(
@@ -305,6 +321,28 @@ where
     {
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+        }
+        if self.str_spans.len() > U::MAX_INDEXABLE_LEN_RAW {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "for output type {}, caller must not have more than {} elements, got {}",
+                    type_name::<U>(),
+                    U::MAX_INDEXABLE_LEN_RAW,
+                    self.str_spans.len(),
+                ),
+            ));
+        }
+        if query.len() > U::MAX_INDEXABLE_LEN_RAW {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "for output type {}, query must not have more than {} elements, got {}",
+                    type_name::<U>(),
+                    U::MAX_INDEXABLE_LEN_RAW,
+                    query.len(),
+                ),
+            ));
         }
 
         let (q_idx_store, convergence_groups) = {
@@ -403,9 +441,30 @@ where
         if max_distance > self.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
         }
-
         if max_distance > query.max_distance {
             return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance.as_u8(), query.max_distance.as_u8())));
+        }
+        if self.str_spans.len() > U::MAX_INDEXABLE_LEN_RAW {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "for output type {}, caller must not have more than {} elements, got {}",
+                    type_name::<U>(),
+                    U::MAX_INDEXABLE_LEN_RAW,
+                    self.str_spans.len(),
+                ),
+            ));
+        }
+        if query.str_spans.len() > U::MAX_INDEXABLE_LEN_RAW {
+            return Err(Error::new(
+                InvalidData,
+                format!(
+                    "for output type {}, query must not have more than {} elements, got {}",
+                    type_name::<U>(),
+                    U::MAX_INDEXABLE_LEN_RAW,
+                    query.str_spans.len(),
+                ),
+            ));
         }
 
         let convergence_groups = if query.variant_map.len() < self.variant_map.len() {
@@ -554,7 +613,8 @@ where
         return Err(Error::new(
             InvalidData,
             format!(
-                "query must not have more than {} elements, got {}",
+                "for output type {}, query must not have more than {} elements, got {}",
+                type_name::<T>(),
                 T::MAX_INDEXABLE_LEN_RAW,
                 query.len(),
             ),
@@ -633,24 +693,25 @@ where
     T: Integer + AsPrimitive<T>,
     usize: AsPrimitive<T>,
 {
-    if query.len() > T::MAX_INDEXABLE_LEN_CROSS {
+    if query.len() > T::MAX_INDEXABLE_LEN_RAW {
         return Err(Error::new(
             InvalidData,
             format!(
-                "query must not have more than {} elements, got {}",
-                T::MAX_INDEXABLE_LEN_CROSS,
+                "for output type {}, query must not have more than {} elements, got {}",
+                type_name::<T>(),
+                T::MAX_INDEXABLE_LEN_RAW,
                 query.len(),
             ),
         ));
     }
-
-    if reference.len() > T::MAX_INDEXABLE_LEN_CROSS {
+    if reference.len() > T::MAX_INDEXABLE_LEN_RAW {
         return Err(Error::new(
             InvalidData,
             format!(
-                "reference must not have more than {} elements, got {}",
-                T::MAX_INDEXABLE_LEN_CROSS,
-                query.len(),
+                "for output type {}, reference must not have more than {} elements, got {}",
+                type_name::<T>(),
+                T::MAX_INDEXABLE_LEN_RAW,
+                reference.len(),
             ),
         ));
     }
@@ -1226,7 +1287,8 @@ mod tests {
     #[test]
     fn test_get_candidates_within_cached() {
         let cached =
-            CachedSymdel::<u32>::new(&TEST_QUERY, MaxDistance::try_from(2).expect("legal"));
+            CachedSymdel::<u32>::new(&TEST_QUERY, MaxDistance::try_from(2).expect("legal"))
+                .expect("short input");
         let cases = [
             (
                 MaxDistance::try_from(1).expect("legal"),
@@ -1280,7 +1342,8 @@ mod tests {
 
     #[test]
     fn test_get_candidates_cross_partially_cached() {
-        let cached = CachedSymdel::<u32>::new(&TEST_REF, MaxDistance::try_from(2).expect("legal"));
+        let cached = CachedSymdel::<u32>::new(&TEST_REF, MaxDistance::try_from(2).expect("legal"))
+            .expect("short input");
         let cases = [
             (
                 MaxDistance::try_from(1).expect("legal"),
@@ -1315,9 +1378,11 @@ mod tests {
     #[test]
     fn test_get_candidates_cross_fully_cached() {
         let cached_q =
-            CachedSymdel::<u32>::new(&TEST_QUERY, MaxDistance::try_from(2).expect("legal"));
+            CachedSymdel::<u32>::new(&TEST_QUERY, MaxDistance::try_from(2).expect("legal"))
+                .expect("short input");
         let cached_r =
-            CachedSymdel::<u32>::new(&TEST_REF, MaxDistance::try_from(2).expect("legal"));
+            CachedSymdel::<u32>::new(&TEST_REF, MaxDistance::try_from(2).expect("legal"))
+                .expect("short input");
         let cases = [
             (
                 MaxDistance::try_from(1).expect("legal"),
@@ -1550,7 +1615,8 @@ mod tests {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let mut test_output_stream = Vec::new();
 
-        let cached = CachedSymdel::<u32>::new(&query, MaxDistance::try_from(2).expect("legal"));
+        let cached = CachedSymdel::<u32>::new(&query, MaxDistance::try_from(2).expect("legal"))
+            .expect("short input");
         let (candidates, dists) = cached
             .get_candidates_within(MaxDistance::try_from(1).expect("legal"))
             .expect("legal max distance");
@@ -1584,7 +1650,8 @@ mod tests {
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
         let mut test_output_stream = Vec::new();
 
-        let cached = CachedSymdel::<u32>::new(&reference, MaxDistance::try_from(2).expect("legal"));
+        let cached = CachedSymdel::<u32>::new(&reference, MaxDistance::try_from(2).expect("legal"))
+            .expect("short input");
         let (candidates, dists) = cached
             .get_candidates_cross::<u32>(&query, MaxDistance::try_from(1).expect("legal"))
             .expect("legal max distance");
@@ -1619,9 +1686,11 @@ mod tests {
         let mut test_output_stream = Vec::new();
 
         let cached_query =
-            CachedSymdel::<u32>::new(&query, MaxDistance::try_from(2).expect("legal"));
+            CachedSymdel::<u32>::new(&query, MaxDistance::try_from(2).expect("legal"))
+                .expect("short input");
         let cached_reference =
-            CachedSymdel::<u32>::new(&reference, MaxDistance::try_from(2).expect("legal"));
+            CachedSymdel::<u32>::new(&reference, MaxDistance::try_from(2).expect("legal"))
+                .expect("short input");
         let (candidates, dists) = cached_reference
             .get_candidates_cross_against_cached::<u32, u32>(
                 &cached_query,
