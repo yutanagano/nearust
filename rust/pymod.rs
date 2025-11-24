@@ -8,7 +8,7 @@ use std::usize;
 
 #[pyclass]
 struct CachedSymdel {
-    internal: super::CachedSymdel,
+    internal: super::CachedSymdel<u32>,
 }
 
 #[pymethods]
@@ -56,7 +56,7 @@ impl CachedSymdel {
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
         let (candidates, dists) = self
             .internal
-            .get_candidates_cross(&query, max_distance)
+            .get_candidates_cross::<u32>(&query, max_distance)
             .map_err(PyValueError::new_err)?;
         let (qi, ri, filtered_dists) =
             collect_true_hits(&candidates, &dists, max_distance, zero_index);
@@ -81,7 +81,7 @@ impl CachedSymdel {
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
         let (candidates, dists) = self
             .internal
-            .get_candidates_cross_against_cached(&query.internal, max_distance)
+            .get_candidates_cross_against_cached::<u32, u32>(&query.internal, max_distance)
             .map_err(PyValueError::new_err)?;
         let (qi, ri, filtered_dists) =
             collect_true_hits(&candidates, &dists, max_distance, zero_index);

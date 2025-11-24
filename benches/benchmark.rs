@@ -16,8 +16,8 @@ fn setup_benchmarks(c: &mut Criterion) {
     let query = bytes_as_ascii_lines(QUERY_BYTES);
     let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
     let mdist = MaxDistance::try_from(1).expect("1 is a valid MaxDistance");
-    let cached_query = CachedSymdel::new(&query, mdist);
-    let cached_reference = CachedSymdel::new(&reference, mdist);
+    let cached_query = CachedSymdel::<u32>::new(&query, mdist);
+    let cached_reference = CachedSymdel::<u32>::new(&reference, mdist);
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
@@ -39,19 +39,20 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_cross (partially cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.get_candidates_cross(&query, mdist);
+            let _ = cached_reference.get_candidates_cross::<u32>(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross (fully cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.get_candidates_cross_against_cached(&cached_query, mdist);
+            let _ = cached_reference
+                .get_candidates_cross_against_cached::<u32, u32>(&cached_query, mdist);
         })
     });
 
     c.bench_function("cached instantiation", |b| {
         b.iter(|| {
-            let _ = CachedSymdel::new(&reference, mdist);
+            let _ = CachedSymdel::<u32>::new(&reference, mdist);
         })
     });
 
