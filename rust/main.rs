@@ -99,11 +99,12 @@ fn main() {
                 process::exit(1)
             });
 
-            let candidates = get_candidates_cross(&primary_input, &comparison_input, max_distance)
-                .unwrap_or_else(|e| {
-                    eprintln!("{}", e);
-                    process::exit(1)
-                });
+            let candidates =
+                get_candidates_cross::<usize>(&primary_input, &comparison_input, max_distance)
+                    .unwrap_or_else(|e| {
+                        eprintln!("{}", e);
+                        process::exit(1)
+                    });
             let dists = compute_dists(&candidates, &primary_input, &comparison_input, max_distance);
 
             write_true_hits(
@@ -120,8 +121,8 @@ fn main() {
                 process::exit(1)
             });
 
-            let candidates =
-                get_candidates_within(&primary_input, max_distance).unwrap_or_else(|e| {
+            let candidates = get_candidates_within::<usize>(&primary_input, max_distance)
+                .unwrap_or_else(|e| {
                     eprintln!("{}", e);
                     process::exit(1)
                 });

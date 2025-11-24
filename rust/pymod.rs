@@ -106,7 +106,8 @@ fn symdel_within<'py>(
     check_strings_ascii(&query)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let candidates = get_candidates_within(&query, max_distance).map_err(PyValueError::new_err)?;
+    let candidates =
+        get_candidates_within::<usize>(&query, max_distance).map_err(PyValueError::new_err)?;
     let dists = compute_dists(&candidates, &query, &query, max_distance);
     let (q_indices, ref_indices, dists) =
         collect_true_hits(&candidates, &dists, max_distance, zero_index);
@@ -133,8 +134,8 @@ fn symdel_cross<'py>(
     check_strings_ascii(&reference)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let candidates =
-        get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
+    let candidates = get_candidates_cross::<usize>(&query, &reference, max_distance)
+        .map_err(PyValueError::new_err)?;
     let dists = compute_dists(&candidates, &query, &reference, max_distance);
     let (q_indices, ref_indices, dists) =
         collect_true_hits(&candidates, &dists, max_distance, zero_index);

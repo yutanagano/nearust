@@ -9,12 +9,12 @@ use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::{ptr, str, u8, usize};
 pub use utils::MaxDistance;
-use utils::{CrossComparable, CrossIndex};
+use utils::{CrossIndex, Integer};
 
 mod pymod;
 
 mod utils {
-    use std::fmt::Debug;
+    use std::fmt::{Debug, Display};
     use std::io::{Error, ErrorKind::InvalidData};
     use std::ops::{BitAnd, BitOr};
 
@@ -46,32 +46,79 @@ mod utils {
         }
     }
 
-    pub trait CrossComparable:
-        Copy + BitAnd<Output = Self> + BitOr<Output = Self> + PartialEq + Debug
+    pub trait Integer:
+        Copy
+        + Sized
+        + Send
+        + Ord
+        + Sync
+        + BitAnd<Output = Self>
+        + BitOr<Output = Self>
+        + PartialEq
+        + Debug
+        + Display
     {
         const TYPE_MASK: Self;
         const VALUE_MASK: Self;
+        const MAX_INDEXABLE_LEN_RAW: usize;
+        const MAX_INDEXABLE_LEN_CROSS: usize;
+        unsafe fn from_usize(input: usize) -> Self;
+        unsafe fn to_usize(self) -> usize;
+        unsafe fn increment(self) -> Self;
     }
 
-    impl CrossComparable for usize {
+    impl Integer for usize {
         const TYPE_MASK: Self = 1 << (usize::BITS - 1);
         const VALUE_MASK: Self = !Self::TYPE_MASK;
+        const MAX_INDEXABLE_LEN_RAW: usize = usize::MAX;
+        const MAX_INDEXABLE_LEN_CROSS: usize = Self::TYPE_MASK - 1;
+        unsafe fn from_usize(input: usize) -> Self {
+            input
+        }
+        unsafe fn to_usize(self) -> usize {
+            self
+        }
+        unsafe fn increment(self) -> Self {
+            self + 1
+        }
     }
 
-    impl CrossComparable for u32 {
-        const TYPE_MASK: Self = 1 << 31;
-        const VALUE_MASK: Self = !Self::TYPE_MASK;
-    }
-
-    impl CrossComparable for u64 {
+    impl Integer for u64 {
         const TYPE_MASK: Self = 1 << 63;
         const VALUE_MASK: Self = !Self::TYPE_MASK;
+        const MAX_INDEXABLE_LEN_RAW: usize = u64::MAX as usize;
+        const MAX_INDEXABLE_LEN_CROSS: usize = (Self::TYPE_MASK - 1) as usize;
+        unsafe fn from_usize(input: usize) -> Self {
+            input as u64
+        }
+        unsafe fn to_usize(self) -> usize {
+            self as usize
+        }
+        unsafe fn increment(self) -> Self {
+            self + 1
+        }
+    }
+
+    impl Integer for u32 {
+        const TYPE_MASK: Self = 1 << 31;
+        const VALUE_MASK: Self = !Self::TYPE_MASK;
+        const MAX_INDEXABLE_LEN_RAW: usize = u32::MAX as usize;
+        const MAX_INDEXABLE_LEN_CROSS: usize = (Self::TYPE_MASK - 1) as usize;
+        unsafe fn from_usize(input: usize) -> Self {
+            input as u32
+        }
+        unsafe fn to_usize(self) -> usize {
+            self as usize
+        }
+        unsafe fn increment(self) -> Self {
+            self + 1
+        }
     }
 
     #[derive(Clone, Copy, PartialEq)]
-    pub struct CrossIndex<T: CrossComparable>(T);
+    pub struct CrossIndex<T: Integer>(T);
 
-    impl<T: CrossComparable> CrossIndex<T> {
+    impl<T: Integer> CrossIndex<T> {
         pub fn from(value: T, is_ref: bool) -> Self {
             debug_assert_ne!(value & T::TYPE_MASK, T::TYPE_MASK);
 
@@ -89,18 +136,6 @@ mod utils {
         pub fn get_value(&self) -> T {
             self.0 & T::VALUE_MASK
         }
-    }
-}
-
-pub trait Integer: Copy + Sized + Send + Ord + Sync {
-    const MAX_INDEXABLE_LEN: usize;
-    unsafe fn from_usize(input: usize) -> Self;
-}
-
-impl Integer for usize {
-    const MAX_INDEXABLE_LEN: usize = usize::MAX;
-    unsafe fn from_usize(input: usize) -> Self {
-        input
     }
 }
 
@@ -513,12 +548,12 @@ pub fn get_candidates_within<T>(
 where
     T: Integer,
 {
-    if query.len() > T::MAX_INDEXABLE_LEN {
+    if query.len() > T::MAX_INDEXABLE_LEN_RAW {
         return Err(Error::new(
             InvalidData,
             format!(
                 "query must not have more than {} elements, got {}",
-                T::MAX_INDEXABLE_LEN,
+                T::MAX_INDEXABLE_LEN_RAW,
                 query.len(),
             ),
         ));
@@ -593,28 +628,31 @@ where
     Ok(get_hit_candidates_from_cis_within(&convergent_chunks))
 }
 
-pub fn get_candidates_cross(
+pub fn get_candidates_cross<T>(
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
     max_distance: MaxDistance,
-) -> io::Result<Vec<(usize, usize)>> {
-    if query.len() >= usize::TYPE_MASK {
+) -> io::Result<Vec<(T, T)>>
+where
+    T: Integer,
+{
+    if query.len() > T::MAX_INDEXABLE_LEN_CROSS {
         return Err(Error::new(
             InvalidData,
             format!(
-                "query must be shorter than {} elements, got {}",
-                usize::TYPE_MASK,
+                "query must not have more than {} elements, got {}",
+                T::MAX_INDEXABLE_LEN_CROSS,
                 query.len(),
             ),
         ));
     }
 
-    if reference.len() >= usize::TYPE_MASK {
+    if reference.len() > T::MAX_INDEXABLE_LEN_CROSS {
         return Err(Error::new(
             InvalidData,
             format!(
-                "reference must be shorter than {} elements, got {}",
-                usize::TYPE_MASK,
+                "reference must not have more than {} elements, got {}",
+                T::MAX_INDEXABLE_LEN_CROSS,
                 query.len(),
             ),
         ));
@@ -628,7 +666,7 @@ pub fn get_candidates_cross(
             num_del_variants_q.iter().sum::<usize>() + num_del_variants_r.iter().sum::<usize>();
         let mut variant_index_pairs_uninit = prealloc_maybeuninit_vec(total_capacity);
 
-        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossIndex<usize>)>]> =
+        let mut vip_chunks_q: Vec<&mut [MaybeUninit<(u64, CrossIndex<T>)>]> =
             Vec::with_capacity(query.len());
         let mut remaining = &mut variant_index_pairs_uninit[..];
         for n in num_del_variants_q {
@@ -637,7 +675,7 @@ pub fn get_candidates_cross(
             remaining = rest;
         }
 
-        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossIndex<usize>)>]> =
+        let mut vip_chunks_r: Vec<&mut [MaybeUninit<(u64, CrossIndex<T>)>]> =
             Vec::with_capacity(reference.len());
         for n in num_del_variants_r {
             let (chunk, rest) = remaining.split_at_mut(n);
@@ -657,7 +695,14 @@ pub fn get_candidates_cross(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_ci(s.as_ref(), idx, max_distance, false, chunk, &hash_builder);
+                write_vi_pairs_ci(
+                    s.as_ref(),
+                    unsafe { T::from_usize(idx) },
+                    max_distance,
+                    false,
+                    chunk,
+                    &hash_builder,
+                );
             });
         reference
             .par_iter()
@@ -665,7 +710,14 @@ pub fn get_candidates_cross(
             .enumerate()
             .with_min_len(100000)
             .for_each(|(idx, (s, chunk))| {
-                write_vi_pairs_ci(s.as_ref(), idx, max_distance, true, chunk, &hash_builder);
+                write_vi_pairs_ci(
+                    s.as_ref(),
+                    unsafe { T::from_usize(idx) },
+                    max_distance,
+                    true,
+                    chunk,
+                    &hash_builder,
+                );
             });
 
         let mut variant_index_pairs =
@@ -806,14 +858,16 @@ fn write_vi_pairs_rawidx<T>(
 }
 
 /// Similar to write_deletion_variants_rawidx but with the indices wrapped in CrossIndex.
-fn write_vi_pairs_ci(
+fn write_vi_pairs_ci<T>(
     input: &str,
-    input_idx: usize,
+    input_idx: T,
     max_deletions: MaxDistance,
     is_ref: bool,
-    chunk: &mut [MaybeUninit<(u64, CrossIndex<usize>)>],
+    chunk: &mut [MaybeUninit<(u64, CrossIndex<T>)>],
     hash_builder: &impl BuildHasher,
-) {
+) where
+    T: Integer,
+{
     let input_length = input.len();
 
     chunk[0].write(if is_ref {
@@ -953,11 +1007,12 @@ where
     hit_candidates
 }
 
-fn get_hit_candidates_from_cis_cross<T, U>(convergent_indices: &[(T, U)]) -> Vec<(usize, usize)>
+fn get_hit_candidates_from_cis_cross<T, U, V>(convergent_indices: &[(T, U)]) -> Vec<(V, V)>
 where
     (T, U): Sync,
-    T: AsRef<[usize]>,
-    U: AsRef<[usize]>,
+    T: AsRef<[V]>,
+    U: AsRef<[V]>,
+    V: Integer,
 {
     let num_hit_candidates = convergent_indices
         .iter()
@@ -965,11 +1020,10 @@ where
         .collect_vec();
 
     let total_capacity = num_hit_candidates.iter().sum();
-    let mut hit_candidates_uninit: Vec<MaybeUninit<(usize, usize)>> =
-        Vec::with_capacity(total_capacity);
+    let mut hit_candidates_uninit: Vec<MaybeUninit<(V, V)>> = Vec::with_capacity(total_capacity);
     unsafe { hit_candidates_uninit.set_len(total_capacity) };
 
-    let mut hc_chunks: Vec<&mut [MaybeUninit<(usize, usize)>]> =
+    let mut hc_chunks: Vec<&mut [MaybeUninit<(V, V)>]> =
         Vec::with_capacity(convergent_indices.len());
     let mut remaining = &mut hit_candidates_uninit[..];
     for n in num_hit_candidates {
@@ -1026,20 +1080,25 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
     Ok(strings)
 }
 
-pub fn compute_dists(
-    hit_candidates: &[(usize, usize)],
+pub fn compute_dists<T>(
+    hit_candidates: &[(T, T)],
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
     max_distance: MaxDistance,
-) -> Vec<u8> {
+) -> Vec<u8>
+where
+    T: Integer,
+{
     hit_candidates
         .par_iter()
         .with_min_len(100000)
         .map(|&(idx_query, idx_reference)| {
             let dist = {
                 match levenshtein::distance_with_args(
-                    query[idx_query].as_ref().bytes(),
-                    reference[idx_reference].as_ref().bytes(),
+                    query[unsafe { idx_query.to_usize() }].as_ref().bytes(),
+                    reference[unsafe { idx_reference.to_usize() }]
+                        .as_ref()
+                        .bytes(),
                     &levenshtein::Args::default().score_cutoff(max_distance.as_usize()),
                 ) {
                     None => u8::MAX,
@@ -1053,12 +1112,15 @@ pub fn compute_dists(
 }
 
 /// Examine and double check hits to see if they are real
-pub fn collect_true_hits(
-    hit_candidates: &[(usize, usize)],
+pub fn collect_true_hits<T>(
+    hit_candidates: &[(T, T)],
     dists: &[u8],
     max_distance: MaxDistance,
     zero_index: bool,
-) -> (Vec<usize>, Vec<usize>, Vec<u8>) {
+) -> (Vec<T>, Vec<T>, Vec<u8>)
+where
+    T: Integer,
+{
     let mut qi_filtered = Vec::with_capacity(dists.len());
     let mut ri_filtered = Vec::with_capacity(dists.len());
     let mut dists_filtered = Vec::with_capacity(dists.len());
@@ -1072,8 +1134,8 @@ pub fn collect_true_hits(
             ri_filtered.push(ri);
             dists_filtered.push(d);
         } else {
-            qi_filtered.push(qi + 1);
-            ri_filtered.push(ri + 1);
+            qi_filtered.push(unsafe { qi.increment() });
+            ri_filtered.push(unsafe { ri.increment() });
             dists_filtered.push(d);
         }
     }
@@ -1086,13 +1148,15 @@ pub fn collect_true_hits(
 }
 
 /// Write to stdout
-pub fn write_true_hits(
-    hit_candidates: &[(usize, usize)],
+pub fn write_true_hits<T>(
+    hit_candidates: &[(T, T)],
     dists: &[u8],
     max_distance: MaxDistance,
     zero_index: bool,
     writer: &mut impl Write,
-) {
+) where
+    T: Integer,
+{
     for (&(qi, ri), &d) in hit_candidates.into_iter().zip(dists.into_iter()) {
         if d > max_distance.as_u8() {
             continue;
@@ -1101,7 +1165,14 @@ pub fn write_true_hits(
         if zero_index {
             write!(writer, "{},{},{}\n", qi, ri, d).unwrap();
         } else {
-            write!(writer, "{},{},{}\n", qi + 1, ri + 1, d).unwrap();
+            write!(
+                writer,
+                "{},{},{}\n",
+                unsafe { qi.increment() },
+                unsafe { ri.increment() },
+                d
+            )
+            .unwrap();
         }
     }
 }
@@ -1160,7 +1231,7 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = get_candidates_within(&TEST_QUERY, mdist).expect("short input");
+            let result = get_candidates_within::<usize>(&TEST_QUERY, mdist).expect("short input");
             assert_eq!(result, expected);
         }
     }
@@ -1213,7 +1284,8 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = get_candidates_cross(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
+            let result =
+                get_candidates_cross::<usize>(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
             assert_eq!(result, expected);
         }
     }
@@ -1334,7 +1406,7 @@ mod tests {
         ];
 
         for (candidates, reference, mdist, expected) in cases {
-            let results = compute_dists(&candidates, &TEST_QUERY, reference, mdist);
+            let results = compute_dists::<usize>(&candidates, &TEST_QUERY, reference, mdist);
             assert_eq!(results, expected);
         }
     }
@@ -1357,7 +1429,7 @@ mod tests {
         ];
 
         for (candidates, dists, mdist, expected) in cases {
-            let result = collect_true_hits(&candidates, &dists, mdist, true);
+            let result = collect_true_hits::<usize>(&candidates, &dists, mdist, true);
             assert_eq!(result, expected);
         }
     }
@@ -1381,7 +1453,7 @@ mod tests {
         let mut test_output_stream = Vec::new();
 
         for (candidates, dists, mdist, expected) in cases {
-            write_true_hits(&candidates, &dists, mdist, true, &mut test_output_stream);
+            write_true_hits::<usize>(&candidates, &dists, mdist, true, &mut test_output_stream);
             assert_eq!(test_output_stream, expected.as_bytes());
             test_output_stream.clear();
         }
@@ -1407,7 +1479,7 @@ mod tests {
         let mdist_two = MaxDistance::try_from(2).expect("legal");
         let mut test_output_stream = Vec::new();
 
-        let candidates = get_candidates_within(&query, mdist_one).expect("short input");
+        let candidates = get_candidates_within::<usize>(&query, mdist_one).expect("short input");
         let dists = compute_dists(&candidates, &query, &query, mdist_one);
         write_true_hits(
             &candidates,
@@ -1420,7 +1492,7 @@ mod tests {
 
         test_output_stream.clear();
 
-        let candidates = get_candidates_within(&query, mdist_two).expect("short input");
+        let candidates = get_candidates_within::<usize>(&query, mdist_two).expect("short input");
         let dists = compute_dists(&candidates, &query, &query, mdist_two);
         write_true_hits(
             &candidates,
@@ -1438,9 +1510,12 @@ mod tests {
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
         let mut test_output_stream = Vec::new();
 
-        let candidates =
-            get_candidates_cross(&query, &reference, MaxDistance::try_from(1).expect("legal"))
-                .expect("valid inputs");
+        let candidates = get_candidates_cross::<usize>(
+            &query,
+            &reference,
+            MaxDistance::try_from(1).expect("legal"),
+        )
+        .expect("valid inputs");
         let dists = compute_dists(
             &candidates,
             &query,
@@ -1458,9 +1533,12 @@ mod tests {
 
         test_output_stream.clear();
 
-        let candidates =
-            get_candidates_cross(&query, &reference, MaxDistance::try_from(2).expect("legal"))
-                .expect("valid inputs");
+        let candidates = get_candidates_cross::<usize>(
+            &query,
+            &reference,
+            MaxDistance::try_from(2).expect("legal"),
+        )
+        .expect("valid inputs");
         let dists = compute_dists(
             &candidates,
             &query,

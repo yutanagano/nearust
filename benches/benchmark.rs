@@ -21,13 +21,13 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
-            let _ = get_candidates_within::<usize>(&query, mdist);
+            let _ = get_candidates_within::<u32>(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross", |b| {
         b.iter(|| {
-            let _ = get_candidates_cross(&query, &reference, mdist);
+            let _ = get_candidates_cross::<u32>(&query, &reference, mdist);
         })
     });
 
@@ -56,14 +56,16 @@ fn setup_benchmarks(c: &mut Criterion) {
     });
 
     c.bench_function("compute_dists", |b| {
-        let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
+        let candidates =
+            get_candidates_cross::<u32>(&query, &reference, mdist).expect("valid input");
         b.iter(|| {
             let _ = compute_dists(&candidates, &query, &reference, mdist);
         })
     });
 
     c.bench_function("collect_true_hits", |b| {
-        let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
+        let candidates =
+            get_candidates_cross::<u32>(&query, &reference, mdist).expect("valid input");
         let dists = compute_dists(&candidates, &query, &reference, mdist);
         b.iter(|| {
             let _ = collect_true_hits(&candidates, &dists, mdist, true);
