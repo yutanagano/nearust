@@ -1,5 +1,6 @@
 use super::{
-    collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within, MaxDistance,
+    collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within, Integer,
+    MaxDistance,
 };
 use numpy::IntoPyArray;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
@@ -106,20 +107,37 @@ fn symdel_within<'py>(
     check_strings_ascii(&query)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let candidates =
-        get_candidates_within::<usize>(&query, max_distance).map_err(PyValueError::new_err)?;
-    let dists = compute_dists(&candidates, &query, &query, max_distance);
-    let (q_indices, ref_indices, dists) =
-        collect_true_hits(&candidates, &dists, max_distance, zero_index);
+    if query.len() <= u32::MAX_INDEXABLE_LEN_RAW {
+        let candidates =
+            get_candidates_within::<u32>(&query, max_distance).map_err(PyValueError::new_err)?;
+        let dists = compute_dists(&candidates, &query, &query, max_distance);
+        let (q_indices, ref_indices, dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
-    PyTuple::new(
-        py,
-        &[
-            q_indices.into_pyarray(py).as_any(),
-            ref_indices.into_pyarray(py).as_any(),
-            dists.into_pyarray(py).as_any(),
-        ],
-    )
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
+    } else {
+        let candidates =
+            get_candidates_within::<u64>(&query, max_distance).map_err(PyValueError::new_err)?;
+        let dists = compute_dists(&candidates, &query, &query, max_distance);
+        let (q_indices, ref_indices, dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
+
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
+    }
 }
 
 #[pyfunction]
@@ -134,20 +152,39 @@ fn symdel_cross<'py>(
     check_strings_ascii(&reference)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
-    let candidates = get_candidates_cross::<usize>(&query, &reference, max_distance)
-        .map_err(PyValueError::new_err)?;
-    let dists = compute_dists(&candidates, &query, &reference, max_distance);
-    let (q_indices, ref_indices, dists) =
-        collect_true_hits(&candidates, &dists, max_distance, zero_index);
+    if query.len() <= u32::MAX_INDEXABLE_LEN_CROSS
+        && reference.len() <= u32::MAX_INDEXABLE_LEN_CROSS
+    {
+        let candidates = get_candidates_cross::<u32>(&query, &reference, max_distance)
+            .map_err(PyValueError::new_err)?;
+        let dists = compute_dists(&candidates, &query, &reference, max_distance);
+        let (q_indices, ref_indices, dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
-    PyTuple::new(
-        py,
-        &[
-            q_indices.into_pyarray(py).as_any(),
-            ref_indices.into_pyarray(py).as_any(),
-            dists.into_pyarray(py).as_any(),
-        ],
-    )
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
+    } else {
+        let candidates = get_candidates_cross::<u64>(&query, &reference, max_distance)
+            .map_err(PyValueError::new_err)?;
+        let dists = compute_dists(&candidates, &query, &reference, max_distance);
+        let (q_indices, ref_indices, dists) =
+            collect_true_hits(&candidates, &dists, max_distance, zero_index);
+
+        PyTuple::new(
+            py,
+            &[
+                q_indices.into_pyarray(py).as_any(),
+                ref_indices.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
+            ],
+        )
+    }
 }
 
 fn check_strings_ascii(strings: &[String]) -> Result<(), PyErr> {
