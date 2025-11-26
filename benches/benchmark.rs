@@ -16,18 +16,18 @@ fn setup_benchmarks(c: &mut Criterion) {
     let query = bytes_as_ascii_lines(QUERY_BYTES);
     let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
     let mdist = MaxDistance::try_from(1).expect("1 is a valid MaxDistance");
-    let cached_query = CachedSymdel::<u32>::new(&query, mdist).expect("short input");
-    let cached_reference = CachedSymdel::<u32>::new(&reference, mdist).expect("short input");
+    let cached_query = CachedSymdel::new(&query, mdist).expect("short input");
+    let cached_reference = CachedSymdel::new(&reference, mdist).expect("short input");
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
-            let _ = get_candidates_within::<u32>(&query, mdist);
+            let _ = get_candidates_within(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross", |b| {
         b.iter(|| {
-            let _ = get_candidates_cross::<u32>(&query, &reference, mdist);
+            let _ = get_candidates_cross(&query, &reference, mdist);
         })
     });
 
@@ -39,34 +39,31 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_cross (partially cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.get_candidates_cross::<u32>(&query, mdist);
+            let _ = cached_reference.get_candidates_cross(&query, mdist);
         })
     });
 
     c.bench_function("get_candidates_cross (fully cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference
-                .get_candidates_cross_against_cached::<u32, u32>(&cached_query, mdist);
+            let _ = cached_reference.get_candidates_cross_against_cached(&cached_query, mdist);
         })
     });
 
     c.bench_function("cached instantiation", |b| {
         b.iter(|| {
-            let _ = CachedSymdel::<u32>::new(&reference, mdist);
+            let _ = CachedSymdel::new(&reference, mdist);
         })
     });
 
     c.bench_function("compute_dists", |b| {
-        let candidates =
-            get_candidates_cross::<u32>(&query, &reference, mdist).expect("valid input");
+        let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
         b.iter(|| {
             let _ = compute_dists(&candidates, &query, &reference, mdist);
         })
     });
 
     c.bench_function("collect_true_hits", |b| {
-        let candidates =
-            get_candidates_cross::<u32>(&query, &reference, mdist).expect("valid input");
+        let candidates = get_candidates_cross(&query, &reference, mdist).expect("valid input");
         let dists = compute_dists(&candidates, &query, &reference, mdist);
         b.iter(|| {
             let _ = collect_true_hits(&candidates, &dists, mdist, true);

@@ -1,6 +1,6 @@
 use _lib::{
     compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
-    write_true_hits, Integer, MaxDistance,
+    write_true_hits, MaxDistance,
 };
 use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
@@ -93,49 +93,25 @@ fn main() {
                     eprintln!("(from {}) {}", &path, e);
                     process::exit(1);
                 });
-
             let max_distance = MaxDistance::try_from(args.max_distance).unwrap_or_else(|e| {
                 eprintln!("{}", e);
                 process::exit(1)
             });
 
-            if primary_input.len() <= u32::MAX_INDEXABLE_LEN_CROSS
-                && comparison_input.len() <= u32::MAX_INDEXABLE_LEN_CROSS
-            {
-                let candidates =
-                    get_candidates_cross::<u32>(&primary_input, &comparison_input, max_distance)
-                        .unwrap_or_else(|e| {
-                            eprintln!("{}", e);
-                            process::exit(1)
-                        });
-                let dists =
-                    compute_dists(&candidates, &primary_input, &comparison_input, max_distance);
+            let candidates = get_candidates_cross(&primary_input, &comparison_input, max_distance)
+                .unwrap_or_else(|e| {
+                    eprintln!("{}", e);
+                    process::exit(1)
+                });
+            let dists = compute_dists(&candidates, &primary_input, &comparison_input, max_distance);
 
-                write_true_hits(
-                    &candidates,
-                    &dists,
-                    max_distance,
-                    args.zero_index,
-                    &mut stdout,
-                );
-            } else {
-                let candidates =
-                    get_candidates_cross::<u64>(&primary_input, &comparison_input, max_distance)
-                        .unwrap_or_else(|e| {
-                            eprintln!("{}", e);
-                            process::exit(1)
-                        });
-                let dists =
-                    compute_dists(&candidates, &primary_input, &comparison_input, max_distance);
-
-                write_true_hits(
-                    &candidates,
-                    &dists,
-                    max_distance,
-                    args.zero_index,
-                    &mut stdout,
-                );
-            }
+            write_true_hits(
+                &candidates,
+                &dists,
+                max_distance,
+                args.zero_index,
+                &mut stdout,
+            );
         }
         None => {
             let max_distance = MaxDistance::try_from(args.max_distance).unwrap_or_else(|e| {
@@ -143,39 +119,20 @@ fn main() {
                 process::exit(1)
             });
 
-            if primary_input.len() <= u32::MAX_INDEXABLE_LEN_RAW {
-                let candidates = get_candidates_within::<u32>(&primary_input, max_distance)
-                    .unwrap_or_else(|e| {
-                        eprintln!("{}", e);
-                        process::exit(1)
-                    });
-                let dists =
-                    compute_dists(&candidates, &primary_input, &primary_input, max_distance);
+            let candidates =
+                get_candidates_within(&primary_input, max_distance).unwrap_or_else(|e| {
+                    eprintln!("{}", e);
+                    process::exit(1)
+                });
+            let dists = compute_dists(&candidates, &primary_input, &primary_input, max_distance);
 
-                write_true_hits(
-                    &candidates,
-                    &dists,
-                    max_distance,
-                    args.zero_index,
-                    &mut stdout,
-                );
-            } else {
-                let candidates = get_candidates_within::<u64>(&primary_input, max_distance)
-                    .unwrap_or_else(|e| {
-                        eprintln!("{}", e);
-                        process::exit(1)
-                    });
-                let dists =
-                    compute_dists(&candidates, &primary_input, &primary_input, max_distance);
-
-                write_true_hits(
-                    &candidates,
-                    &dists,
-                    max_distance,
-                    args.zero_index,
-                    &mut stdout,
-                );
-            };
+            write_true_hits(
+                &candidates,
+                &dists,
+                max_distance,
+                args.zero_index,
+                &mut stdout,
+            );
         }
     };
 }

@@ -404,7 +404,6 @@ dependencies = [
  "foldhash",
  "hashbrown",
  "itertools 0.13.0",
- "num-traits",
  "numpy",
  "pyo3",
  "rapidfuzz",
