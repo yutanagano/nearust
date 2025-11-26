@@ -233,7 +233,10 @@ impl CachedSymdel {
             (convergent_indices, convergence_groups)
         };
 
-        let mut variant_map = HashMap::with_hasher(IdentityHasherBuilder::default());
+        let mut variant_map = HashMap::with_capacity_and_hasher(
+            convergence_groups.len(),
+            IdentityHasherBuilder::default(),
+        );
 
         for (v_hash, index_range) in convergence_groups {
             variant_map.entry(v_hash).insert(index_range);
