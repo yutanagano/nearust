@@ -9,7 +9,7 @@ def symdel(
     reference: Optional[Iterable[str]] = None,
     max_distance: int = 1,
     zero_index: bool = True,
-) -> tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint8]]:
+) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
     """
     Quickly detects pairs of similar strings.
 
@@ -25,10 +25,10 @@ def symdel(
 
     Returns
     -------
-    i : ndarray of shape (N,), dtype=uint64
+    i : ndarray of shape (N,), dtype=uint32
         Indices of strings in the query that have neighbors.
 
-    j : ndarray of shape (N,), dtype=uint64
+    j : ndarray of shape (N,), dtype=uint32
         Indices of neighbor strings. If only the `query` parameter was set,
         then ``query[i[k]]`` and ``query[j[k]]`` are neighbors. If both `query`
         and `reference` parameters were set, then ``query[i[k]]`` and
@@ -48,9 +48,9 @@ def symdel(
     >>> import nearust
     >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"])
     >>> i
-    array([0, 1], dtype=uint64)
+    array([0, 1], dtype=uint32)
     >>> j
-    array([1, 2], dtype=uint64)
+    array([1, 2], dtype=uint32)
     >>> dists
     array([1, 1], dtype=uint8)
 
@@ -59,9 +59,9 @@ def symdel(
 
     >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
     >>> i
-    array([0, 0, 1], dtype=uint64)
+    array([0, 0, 1], dtype=uint32)
     >>> j
-    array([1, 2, 2], dtype=uint64)
+    array([1, 2, 2], dtype=uint32)
     >>> dists
     array([1, 2, 1], dtype=uint8)
 
@@ -70,9 +70,9 @@ def symdel(
 
     >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
     >>> i
-    array([1, 2, 2], dtype=uint64)
+    array([1, 2, 2], dtype=uint32)
     >>> j
-    array([3, 2, 3], dtype=uint64)
+    array([3, 2, 3], dtype=uint32)
     >>> dists
     array([1, 1, 0], dtype=uint8)
 
@@ -82,9 +82,9 @@ def symdel(
 
     >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
     >>> i
-    array([1, 2], dtype=uint64)
+    array([1, 2], dtype=uint32)
     >>> j
-    array([2, 3], dtype=uint64)
+    array([2, 3], dtype=uint32)
     >>> dists
     array([1, 1], dtype=uint8)
     """
@@ -121,7 +121,7 @@ class CachedSymdel:
         query: Iterable[str] | "CachedSymdel" | None = None,
         max_distance: int = 1,
         zero_index: bool = True,
-    ) -> tuple[NDArray[np.uint64], NDArray[np.uint64], NDArray[np.uint8]]:
+    ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
         """
         Quickly detects pairs of similar strings.
 
@@ -147,10 +147,10 @@ class CachedSymdel:
             cases where you want to memoize deletion variant computations for
             both query and reference sets.
 
-        i : ndarray of shape (N,), dtype=uint64
+        i : ndarray of shape (N,), dtype=uint32
             Indices of strings in the query that have neighbors.
 
-        j : ndarray of shape (N,), dtype=uint64
+        j : ndarray of shape (N,), dtype=uint32
             Indices of neighbor strings. If only the `query` parameter was set,
             then ``query[i[k]]`` and ``query[j[k]]`` are neighbors. If both
             `query` and `reference` parameters were set, then ``query[i[k]]``
@@ -178,9 +178,9 @@ class CachedSymdel:
 
         >>> (i, j, dists) = cached.symdel(["fizz", "fuzz", "buzz"])
         >>> i
-        array([1, 2, 2], dtype=uint64)
+        array([1, 2, 2], dtype=uint32)
         >>> j
-        array([3, 2, 3], dtype=uint64)
+        array([3, 2, 3], dtype=uint32)
         >>> dists
         array([1, 1, 0], dtype=uint8)
 
@@ -190,9 +190,9 @@ class CachedSymdel:
         >>> cached_query = nearust.CachedSymdel(["fizz", "fuzz", "buzz"])
         >>> (i, j, dists) = cached.symdel(cached_query)
         >>> i
-        array([1, 2, 2], dtype=uint64)
+        array([1, 2, 2], dtype=uint32)
         >>> j
-        array([3, 2, 3], dtype=uint64)
+        array([3, 2, 3], dtype=uint32)
         >>> dists
         array([1, 1, 0], dtype=uint8)
 
@@ -201,9 +201,9 @@ class CachedSymdel:
 
         >>> (i, j, dists) = cached.symdel()
         >>> i
-        array([2], dtype=uint64)
+        array([2], dtype=uint32)
         >>> j
-        array([3], dtype=uint64)
+        array([3], dtype=uint32)
         >>> dists
         array([1], dtype=uint8)
 
@@ -214,16 +214,16 @@ class CachedSymdel:
         >>> cached_maxd2 = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
         >>> (i, j, dists) = cached_maxd2.symdel(["fizz", "fuzz", "buzz"])
         >>> i
-        array([1, 2, 2], dtype=uint64)
+        array([1, 2, 2], dtype=uint32)
         >>> j
-        array([3, 2, 3], dtype=uint64)
+        array([3, 2, 3], dtype=uint32)
         >>> dists
         array([1, 1, 0], dtype=uint8)
         >>> (i, j, dists) = cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
         >>> i
-        array([0, 0, 1, 1, 2, 2], dtype=uint64)
+        array([0, 0, 1, 1, 2, 2], dtype=uint32)
         >>> j
-        array([2, 3, 2, 3, 2, 3], dtype=uint64)
+        array([2, 3, 2, 3, 2, 3], dtype=uint32)
         >>> dists
         array([2, 2, 2, 1, 1, 0], dtype=uint8)
         >>> # max_distance > 2 will throw an error!: cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=3)

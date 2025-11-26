@@ -16,7 +16,7 @@ impl CachedSymdel {
     fn new(reference: Vec<String>, max_distance: u8) -> PyResult<Self> {
         check_strings_ascii(&reference)?;
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let internal = super::CachedSymdel::new(&reference, max_distance);
+        let internal = super::CachedSymdel::new(&reference, max_distance).expect("short input");
         Ok(CachedSymdel { internal })
     }
 
@@ -60,14 +60,14 @@ impl CachedSymdel {
         let (qi, ri, filtered_dists) =
             collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
-        PyTuple::new(
+        return PyTuple::new(
             py,
             &[
                 qi.into_pyarray(py).as_any(),
                 ri.into_pyarray(py).as_any(),
                 filtered_dists.into_pyarray(py).as_any(),
             ],
-        )
+        );
     }
 
     fn symdel_cross_against_cached<'py>(
@@ -85,14 +85,14 @@ impl CachedSymdel {
         let (qi, ri, filtered_dists) =
             collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
-        PyTuple::new(
+        return PyTuple::new(
             py,
             &[
                 qi.into_pyarray(py).as_any(),
                 ri.into_pyarray(py).as_any(),
                 filtered_dists.into_pyarray(py).as_any(),
             ],
-        )
+        );
     }
 }
 
@@ -105,8 +105,7 @@ fn symdel_within<'py>(
 ) -> PyResult<Bound<'py, PyTuple>> {
     check_strings_ascii(&query)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-
-    let candidates = get_candidates_within(&query, max_distance);
+    let candidates = get_candidates_within(&query, max_distance).map_err(PyValueError::new_err)?;
     let dists = compute_dists(&candidates, &query, &query, max_distance);
     let (q_indices, ref_indices, dists) =
         collect_true_hits(&candidates, &dists, max_distance, zero_index);
@@ -132,7 +131,6 @@ fn symdel_cross<'py>(
     check_strings_ascii(&query)?;
     check_strings_ascii(&reference)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-
     let candidates =
         get_candidates_cross(&query, &reference, max_distance).map_err(PyValueError::new_err)?;
     let dists = compute_dists(&candidates, &query, &reference, max_distance);
