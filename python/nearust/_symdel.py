@@ -1,4 +1,4 @@
-import nearust._lib as rustlib
+import nearust.nearust as rustlib
 import numpy as np
 from numpy.typing import NDArray
 from typing import Iterable, Optional

@@ -1,4 +1,4 @@
-use super::{
+use crate::{
     collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within, MaxDistance,
 };
 use numpy::IntoPyArray;
@@ -159,7 +159,7 @@ fn check_strings_ascii(strings: &[String]) -> Result<(), PyErr> {
 }
 
 #[pymodule]
-fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn nearust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(symdel_within, m)?)?;
     m.add_function(wrap_pyfunction!(symdel_cross, m)?)?;
     m.add_class::<CachedSymdel>()?;

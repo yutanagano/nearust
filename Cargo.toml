@@ -26,7 +26,7 @@ inherits = "release"
 lto = "thin"
 
 [lib]
-name = "_lib"
+name = "nearust"
 path = "rust/lib.rs"
 crate-type = ["lib", "cdylib"]
 

@@ -47,7 +47,7 @@ Issues = "https://github.com/yutanagano/nearust/issues"
 find = { where = ["python"] }
 
 [[tool.setuptools-rust.ext-modules]]
-target = "nearust._lib"
+target = "nearust.nearust"
 
 [tool.cibuildwheel]
 skip = ["*-musllinux_i686"]
