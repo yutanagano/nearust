@@ -1,8 +1,8 @@
-use _lib::{
+use clap::{ArgAction, Parser};
+use nearust::{
     compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
     write_true_hits, MaxDistance,
 };
-use clap::{ArgAction, Parser};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter};
