@@ -1,8 +1,8 @@
-use _lib::{
+use criterion::{criterion_group, criterion_main, Criterion};
+use nearust::{
     collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within,
     get_input_lines_as_ascii, CachedSymdel, MaxDistance,
 };
-use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::Cursor;
 
 static QUERY_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
