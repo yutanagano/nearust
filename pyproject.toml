@@ -1,10 +1,9 @@
 [build-system]
-requires = ["setuptools", "setuptools-rust"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "nearust"
-version = "0.6.0"
 requires-python = ">=3.10"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
@@ -35,7 +34,7 @@ classifiers = [
 dependencies = ["numpy~=2.3"]
 
 [project.optional-dependencies]
-dev = ["sphinx", "esbonio", "shibuya", "numpydoc", "pandas", "memray"]
+dev = ["sphinx", "esbonio", "shibuya", "numpydoc", "pandas"]
 
 [project.urls]
 Homepage = "https://github.com/yutanagano/nearust"
@@ -43,21 +42,5 @@ Documentation = "https://nearust.readthedocs.io"
 Repository = "https://github.com/yutanagano/nearust"
 Issues = "https://github.com/yutanagano/nearust/issues"
 
-[tool.setuptools.packages]
-find = { where = ["python"] }
-
-[[tool.setuptools-rust.ext-modules]]
-target = "nearust.nearust"
-
-[tool.cibuildwheel]
-skip = ["*-musllinux_i686"]
-
-[tool.cibuildwheel.linux]
-before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y"
-environment = { PATH = "$HOME/.cargo/bin:$PATH" }
-
-[tool.cibuildwheel.macos]
-environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
-
-[tool.cibuildwheel.windows]
-before-all = "rustup target add i686-pc-windows-msvc"
+[tool.maturin]
+module-name = "nearust"

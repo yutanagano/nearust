@@ -1,7 +1,7 @@
 [package]
 name = "nearust"
 authors = ["Yuta Nagano"]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Fast detection of similar strings"
 repository = "https://github.com/yutanagano/nearust"
@@ -27,12 +27,12 @@ lto = "thin"
 
 [lib]
 name = "nearust"
-path = "rust/lib.rs"
+# path = "rust/lib.rs"
 crate-type = ["lib", "cdylib"]
 
 [[bin]]
 name = "nearust"
-path = "rust/main.rs"
+# path = "rust/main.rs"
 
 [[bench]]
 name = "benchmark"

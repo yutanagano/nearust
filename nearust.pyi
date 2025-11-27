@@ -1,12 +1,10 @@
-import nearust.nearust as rustlib
 import numpy as np
 from numpy.typing import NDArray
-from typing import Iterable, Optional
-
+from typing import Sequence, Optional
 
 def symdel(
-    query: Iterable[str],
-    reference: Optional[Iterable[str]] = None,
+    query: Sequence[str],
+    reference: Optional[Sequence[str]] = None,
     max_distance: int = 1,
     zero_index: bool = True,
 ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
@@ -88,11 +86,7 @@ def symdel(
     >>> dists
     array([1, 1], dtype=uint8)
     """
-    if reference is not None:
-        return rustlib.symdel_cross(query, reference, max_distance, zero_index)
-
-    return rustlib.symdel_within(query, max_distance, zero_index)
-
+    ...
 
 class CachedSymdel:
     """
@@ -113,12 +107,10 @@ class CachedSymdel:
         method will only be accept `max_distance` less than or equal to X.
     """
 
-    def __init__(self, reference: Iterable[str], max_distance: int = 1) -> None:
-        self._internal = rustlib.CachedSymdel(reference, max_distance)
-
+    def __init__(self, reference: Sequence[str], max_distance: int = 1) -> None: ...
     def symdel(
         self,
-        query: Iterable[str] | "CachedSymdel" | None = None,
+        query: Sequence[str] | "CachedSymdel" | None = None,
         max_distance: int = 1,
         zero_index: bool = True,
     ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
@@ -228,12 +220,4 @@ class CachedSymdel:
         array([2, 2, 2, 1, 1, 0], dtype=uint8)
         >>> # max_distance > 2 will throw an error!: cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=3)
         """
-        if query is None:
-            return self._internal.symdel_within(max_distance, zero_index)
-
-        if isinstance(query, CachedSymdel):
-            return self._internal.symdel_cross_against_cached(
-                query._internal, max_distance, zero_index
-            )
-
-        return self._internal.symdel_cross(query, max_distance, zero_index)
+        ...
