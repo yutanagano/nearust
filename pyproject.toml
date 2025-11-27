@@ -44,6 +44,7 @@ Issues = "https://github.com/yutanagano/nearust/issues"
 
 [tool.maturin]
 module-name = "nearust"
+profile = "release"
 
 [tool.cibuildwheel]
 skip = ["*-musllinux_i686"]

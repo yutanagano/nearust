@@ -1,3 +1,10 @@
+## Version 0.6.1
+
+- Faster Levenshtein distance calculations making use of max distance cutoff
+- Preallocation for backing memory of CachedSymdel
+- Direct exposure of Rust functions to Python
+- Use of 32 bit indexes for string sets instead of 64 bits
+
 ## Version 0.6.0
 
 - Change in return types of Python API:
