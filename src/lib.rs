@@ -44,7 +44,7 @@ mod utils {
         }
     }
 
-    #[derive(Clone, Copy, PartialEq)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub struct CrossIndex(u32);
 
     impl CrossIndex {
@@ -689,8 +689,7 @@ pub fn get_candidates_cross(
         let mut variant_index_pairs =
             unsafe { cast_to_initialised_vec(variant_index_pairs_uninit) };
 
-        variant_index_pairs
-            .par_sort_unstable_by(|(variant1, _), (variant2, _)| variant1.cmp(variant2));
+        variant_index_pairs.par_sort_unstable();
         variant_index_pairs.dedup();
 
         let mut total_num_convergent_indices = 0;
@@ -712,9 +711,7 @@ pub fn get_candidates_cross(
             .filter(|chunk| chunk.len() > 1)
             .map(|chunk| {
                 let len_q = chunk.iter().filter(|(_, ci)| !ci.is_ref()).count();
-
                 let len_r = chunk.iter().filter(|(_, ci)| ci.is_ref()).count();
-
                 (chunk, len_q, len_r)
             })
             .filter(|(_, len_q, len_r)| len_q * len_r > 0)
