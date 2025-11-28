@@ -1,3 +1,8 @@
+## Version 0.6.2
+
+- Reduce unnecessary allocations when computing string variant hashes
+- Obtain references to Python strings at the PyO3 border instead of allocating and copying new Rust Strings
+
 ## Version 0.6.1
 
 - Faster Levenshtein distance calculations making use of max distance cutoff
