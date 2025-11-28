@@ -800,22 +800,23 @@ fn write_vi_pairs_rawidx(
     chunk[0].write((hash_string(input, hash_builder), input_idx));
 
     let mut variant_idx = 1;
+    let mut variant_buffer = Vec::with_capacity(input_length);
     for num_deletions in 1..=max_deletions.as_u8() {
         if num_deletions as usize > input_length {
             break;
         }
 
         for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
-            let mut variant = String::with_capacity(input_length - num_deletions as usize);
+            variant_buffer.clear();
             let mut offset = 0;
 
             for idx in deletion_indices {
-                variant.push_str(&input[offset..idx]);
+                variant_buffer.extend_from_slice(&input.as_bytes()[offset..idx]);
                 offset = idx + 1;
             }
-            variant.push_str(&input[offset..input_length]);
+            variant_buffer.extend_from_slice(&input.as_bytes()[offset..input_length]);
 
-            chunk[variant_idx].write((hash_string(variant, hash_builder), input_idx));
+            chunk[variant_idx].write((hash_string(&variant_buffer, hash_builder), input_idx));
             variant_idx += 1;
         }
     }
@@ -832,45 +833,32 @@ fn write_vi_pairs_ci(
 ) {
     let input_length = input.len();
 
-    chunk[0].write(if is_ref {
-        (
-            hash_string(input, hash_builder),
-            CrossIndex::from(input_idx, true),
-        )
-    } else {
-        (
-            hash_string(input, hash_builder),
-            CrossIndex::from(input_idx, false),
-        )
-    });
+    chunk[0].write((
+        hash_string(input, hash_builder),
+        CrossIndex::from(input_idx, is_ref),
+    ));
 
     let mut variant_idx = 1;
+    let mut variant_buffer = Vec::with_capacity(input_length);
     for num_deletions in 1..=max_deletions.as_u8() {
         if num_deletions as usize > input_length {
             break;
         }
 
         for deletion_indices in (0..input_length).combinations(num_deletions as usize) {
-            let mut variant = String::with_capacity(input_length - num_deletions as usize);
+            variant_buffer.clear();
             let mut offset = 0;
 
             for idx in deletion_indices {
-                variant.push_str(&input[offset..idx]);
+                variant_buffer.extend_from_slice(&input.as_bytes()[offset..idx]);
                 offset = idx + 1;
             }
-            variant.push_str(&input[offset..input_length]);
+            variant_buffer.extend_from_slice(&input.as_bytes()[offset..input_length]);
 
-            chunk[variant_idx].write(if is_ref {
-                (
-                    hash_string(variant, hash_builder),
-                    CrossIndex::from(input_idx, true),
-                )
-            } else {
-                (
-                    hash_string(variant, hash_builder),
-                    CrossIndex::from(input_idx, false),
-                )
-            });
+            chunk[variant_idx].write((
+                hash_string(&variant_buffer, hash_builder),
+                CrossIndex::from(input_idx, is_ref),
+            ));
             variant_idx += 1;
         }
     }
