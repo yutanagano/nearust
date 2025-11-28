@@ -3,7 +3,7 @@ Usage (Python package)
 
 The Python package exposes two ways to use the symdel algorithm. The first is
 the :py:func:`~nearust.symdel` function, which is optimised for one-off
-computations. In addition, the package also provides a memoized implementation
+computations. In addition, the package provides a memoized implementation
 in the :py:class:`~nearust.CachedSymdel` class, which is useful for cases where
 you know you will be repeatedly querying against a large reference set.
 
