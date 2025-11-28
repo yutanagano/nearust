@@ -158,7 +158,7 @@ class CachedSymdel:
         Examples
         --------
         Construct a CachedSymdel instance with an iterable over reference
-        strings. This pre-computes the deletion variats for the strings in the
+        strings. This pre-computes the deletion variants for the strings in the
         reference and stores the results in a hashmap held internally by the
         instance.
 
