@@ -1,10 +1,10 @@
 import numpy as np
 from numpy.typing import NDArray
-from typing import Sequence, Optional
+from typing import Iterable, Optional
 
 def symdel(
-    query: Sequence[str],
-    reference: Optional[Sequence[str]] = None,
+    query: Iterable[str],
+    reference: Optional[Iterable[str]] = None,
     max_distance: int = 1,
     zero_index: bool = True,
 ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
@@ -107,10 +107,10 @@ class CachedSymdel:
         method will only be accept `max_distance` less than or equal to X.
     """
 
-    def __init__(self, reference: Sequence[str], max_distance: int = 1) -> None: ...
+    def __init__(self, reference: Iterable[str], max_distance: int = 1) -> None: ...
     def symdel(
         self,
-        query: Sequence[str] | "CachedSymdel" | None = None,
+        query: Iterable[str] | "CachedSymdel" | None = None,
         max_distance: int = 1,
         zero_index: bool = True,
     ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
@@ -158,7 +158,7 @@ class CachedSymdel:
         Examples
         --------
         Construct a CachedSymdel instance with an iterable over reference
-        strings. This pre-computes the deletion variats for the strings in the
+        strings. This pre-computes the deletion variants for the strings in the
         reference and stores the results in a hashmap held internally by the
         instance.
 

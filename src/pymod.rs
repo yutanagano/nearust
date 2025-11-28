@@ -3,7 +3,11 @@ use crate::{
     CachedSymdel as CSInternal, MaxDistance,
 };
 use numpy::IntoPyArray;
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyTuple};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyString, PyTuple},
+};
 
 /// A memoized implementation of symdel.
 ///
@@ -29,10 +33,14 @@ struct CachedSymdel {
 impl CachedSymdel {
     #[new]
     #[pyo3(signature = (reference, max_distance = 1))]
-    fn new(reference: Vec<String>, max_distance: u8) -> PyResult<Self> {
-        check_strings_ascii(&reference)?;
+    fn new(reference: &Bound<PyAny>, max_distance: u8) -> PyResult<Self> {
+        let ref_handles = get_pystring_handles(&reference)?;
+        let ref_views = get_str_refs(&ref_handles)?;
+        check_strings_ascii(&ref_views)?;
+
         let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let internal = CSInternal::new(&reference, max_distance).map_err(PyValueError::new_err)?;
+        let internal = CSInternal::new(&ref_views, max_distance).map_err(PyValueError::new_err)?;
+
         Ok(CachedSymdel { internal })
     }
 
@@ -79,7 +87,7 @@ impl CachedSymdel {
     /// Examples
     /// --------
     /// Construct a CachedSymdel instance with an iterable over reference
-    /// strings. This pre-computes the deletion variats for the strings in the
+    /// strings. This pre-computes the deletion variants for the strings in the
     /// reference and stores the results in a hashmap held internally by the
     /// instance.
     ///
@@ -159,9 +167,11 @@ impl CachedSymdel {
                             max_distance,
                         )
                         .map_err(PyValueError::new_err)?
-                } else if let Ok(seq) = q_given.extract::<Vec<String>>() {
+                } else if let Ok(iterable) = q_given.try_iter() {
+                    let query_handles = get_pystring_handles(&iterable)?;
+                    let query_views = get_str_refs(&query_handles)?;
                     self.internal
-                        .get_candidates_cross(&seq, max_distance)
+                        .get_candidates_cross(&query_views, max_distance)
                         .map_err(PyValueError::new_err)?
                 } else {
                     let type_name = q_given
@@ -170,7 +180,7 @@ impl CachedSymdel {
                         .map(|pys| pys.to_string())
                         .unwrap_or("UNKNOWN".to_string());
                     return Err(PyValueError::new_err(format!(
-                        "query must be either a sequence of str or CachedSymdel or None, got '{type_name}'",
+                        "query must be either an iterable of str or CachedSymdel or None, got '{type_name}'",
                     )));
                 }
             }
@@ -274,26 +284,32 @@ impl CachedSymdel {
 #[pyo3(signature = (query, reference = None, max_distance = 1, zero_index = true))]
 fn symdel<'py>(
     py: Python<'py>,
-    query: Vec<String>,
-    reference: Option<Vec<String>>,
+    query: &Bound<'py, PyAny>,
+    reference: Option<&Bound<'py, PyAny>>,
     max_distance: u8,
     zero_index: bool,
 ) -> PyResult<Bound<'py, PyTuple>> {
-    check_strings_ascii(&query)?;
+    let query_handles = get_pystring_handles(&query)?;
+    let query_views = get_str_refs(&query_handles)?;
+
+    check_strings_ascii(&query_views)?;
     let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
 
     let (candidates, dists) = match reference {
         Some(ref_given) => {
-            check_strings_ascii(&ref_given)?;
-            let candidates = get_candidates_cross(&query, &ref_given, max_distance)
+            let ref_handles = get_pystring_handles(&ref_given)?;
+            let ref_views = get_str_refs(&ref_handles)?;
+            check_strings_ascii(&ref_views)?;
+
+            let candidates = get_candidates_cross(&query_views, &ref_views, max_distance)
                 .map_err(PyValueError::new_err)?;
-            let dists = compute_dists(&candidates, &query, &ref_given, max_distance);
+            let dists = compute_dists(&candidates, &query_views, &ref_views, max_distance);
             (candidates, dists)
         }
         None => {
             let candidates =
-                get_candidates_within(&query, max_distance).map_err(PyValueError::new_err)?;
-            let dists = compute_dists(&candidates, &query, &query, max_distance);
+                get_candidates_within(&query_views, max_distance).map_err(PyValueError::new_err)?;
+            let dists = compute_dists(&candidates, &query_views, &query_views, max_distance);
             (candidates, dists)
         }
     };
@@ -311,17 +327,38 @@ fn symdel<'py>(
     )
 }
 
-fn check_strings_ascii(strings: &[String]) -> Result<(), PyErr> {
+fn get_pystring_handles<'py>(input: &Bound<'py, PyAny>) -> PyResult<Vec<Bound<'py, PyString>>> {
+    if let Ok(_) = input.cast::<PyString>() {
+        Err(PyValueError::new_err("expected iterable of str, got str"))
+    } else {
+        input
+            .try_iter()?
+            .map(|v| v?.cast_into::<PyString>().map_err(PyErr::from))
+            .collect::<PyResult<Vec<_>>>()
+    }
+}
+
+fn get_str_refs<'py>(input: &'py [Bound<'py, PyString>]) -> PyResult<Vec<&'py str>> {
+    input
+        .iter()
+        .map(|v| v.to_str())
+        .collect::<PyResult<Vec<_>>>()
+}
+
+fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), PyErr> {
     for (idx, s) in strings.iter().enumerate() {
-        if !s.is_ascii() {
-            let err_msg =
-                format!("non-ASCII strings are currently unsupported (\"{s}\" at index {idx})");
+        if !s.as_ref().is_ascii() {
+            let err_msg = format!(
+                "non-ASCII strings are currently unsupported ('{}' at index {idx})",
+                s.as_ref()
+            );
             return Err(PyValueError::new_err(err_msg));
         }
     }
     Ok(())
 }
 
+/// Fast detection of similar strings
 #[pymodule]
 fn nearust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(symdel, m)?)?;
