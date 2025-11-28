@@ -175,7 +175,7 @@ impl CachedSymdel {
             (str_store, str_spans)
         };
 
-        let hash_builder = FixedState::with_seed(42);
+        let hash_builder = FixedState::default();
 
         let (index_store, convergence_groups) = {
             let num_vars_per_string = get_num_del_vars_per_string(reference, max_distance);
@@ -300,7 +300,7 @@ impl CachedSymdel {
             let vip_chunks =
                 get_disjoint_chunks_mut(&num_vars_per_string, &mut variant_index_pairs_uninit[..]);
 
-            let hash_builder = FixedState::with_seed(42);
+            let hash_builder = FixedState::default();
 
             query
                 .par_iter()
@@ -545,7 +545,7 @@ pub fn get_candidates_within(
         let vip_chunks =
             get_disjoint_chunks_mut(&num_vars_per_string, &mut variant_index_pairs_uninit[..]);
 
-        let hash_builder = FixedState::with_seed(42);
+        let hash_builder = FixedState::default();
 
         query
             .par_iter()
@@ -653,7 +653,7 @@ pub fn get_candidates_cross(
         debug_assert_eq!(vip_chunks_q.len(), query.len());
         debug_assert_eq!(vip_chunks_r.len(), reference.len());
 
-        let hash_builder = FixedState::with_seed(42);
+        let hash_builder = FixedState::default();
 
         query
             .par_iter()
