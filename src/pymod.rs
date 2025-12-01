@@ -44,7 +44,7 @@ impl CachedSymdel {
         Ok(CachedSymdel { internal })
     }
 
-    /// Quickly detects pairs of similar strings.
+    /// Detect pairs of similar strings.
     ///
     /// Parameters
     /// ----------
@@ -204,7 +204,7 @@ impl CachedSymdel {
     }
 }
 
-/// Quickly detects pairs of similar strings.
+/// Detect pairs of similar strings.
 ///
 /// Parameters
 /// ----------

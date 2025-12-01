@@ -9,7 +9,7 @@ def symdel(
     zero_index: bool = True,
 ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
     """
-    Quickly detects pairs of similar strings.
+    Detect pairs of similar strings.
 
     Parameters
     ----------
@@ -115,7 +115,7 @@ class CachedSymdel:
         zero_index: bool = True,
     ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
         """
-        Quickly detects pairs of similar strings.
+        Detect pairs of similar strings.
 
         Parameters
         ----------
