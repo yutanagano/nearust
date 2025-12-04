@@ -1,10 +1,10 @@
-/target
 /perf.data*
 /flamegraph.svg
 /test_files_extra
 /docs/build
 /profiling/results
 .venv
+target
 *pycache*
 *egg-info*
 *cpython*

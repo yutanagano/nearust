@@ -58,7 +58,7 @@ function basic_benchmarking {
 }
 
 echo "Profiling within-set symdel..."
-basic_benchmarking "./target/release/nearust ./test_files/cdr3b_1m_a.txt"
+basic_benchmarking "./target/release/symscan ./test_files/cdr3b_1m_a.txt"
 
 echo "Profiling cross-set symdel..."
-basic_benchmarking "./target/release/nearust ./test_files/cdr3b_1m_a.txt ./test_files/cdr3b_1m_b.txt"
+basic_benchmarking "./target/release/symscan ./test_files/cdr3b_1m_a.txt ./test_files/cdr3b_1m_b.txt"

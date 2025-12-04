@@ -43,8 +43,8 @@ def symdel(
     Provide one iterable over strings to look for pairs of similar strings
     within it.
 
-    >>> import nearust
-    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"])
+    >>> import symscan
+    >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"])
     >>> i
     array([0, 1], dtype=uint32)
     >>> j
@@ -55,7 +55,7 @@ def symdel(
     To increase the threshold at which string pairs are considered similar, set
     `max_distance`.
 
-    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
+    >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
     >>> i
     array([0, 0, 1], dtype=uint32)
     >>> j
@@ -66,7 +66,7 @@ def symdel(
     To look for pairs of similar strings across two sets, provide two iterables
     over strings (`query` and `reference`).
 
-    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
+    >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
     >>> i
     array([1, 2, 2], dtype=uint32)
     >>> j
@@ -78,7 +78,7 @@ def symdel(
     0-based (in a manner similar to the default behaviour of the CLI), you can
     set `zero_index` to False.
 
-    >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
+    >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
     >>> i
     array([1, 2], dtype=uint32)
     >>> j
@@ -162,8 +162,8 @@ class CachedSymdel:
         reference and stores the results in a hashmap held internally by the
         instance.
 
-        >>> import nearust
-        >>> cached = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"])
+        >>> import symscan
+        >>> cached = symscan.CachedSymdel(["fooo", "barr", "bazz", "buzz"])
 
         Then, call the symdel method with `query` set to an iterable over query
         strings to find similar strings across it and the reference set.
@@ -179,7 +179,7 @@ class CachedSymdel:
         If you also want to memoize deletion variant computations on the query
         set as well, you can do so.
 
-        >>> cached_query = nearust.CachedSymdel(["fizz", "fuzz", "buzz"])
+        >>> cached_query = symscan.CachedSymdel(["fizz", "fuzz", "buzz"])
         >>> (i, j, dists) = cached.symdel(cached_query)
         >>> i
         array([1, 2, 2], dtype=uint32)
@@ -203,7 +203,7 @@ class CachedSymdel:
         `max_distance` equal to X, it `max_distance` must be set to X or
         greater at construction time.
 
-        >>> cached_maxd2 = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
+        >>> cached_maxd2 = symscan.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
         >>> (i, j, dists) = cached_maxd2.symdel(["fizz", "fuzz", "buzz"])
         >>> i
         array([1, 2, 2], dtype=uint32)

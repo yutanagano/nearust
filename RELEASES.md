@@ -46,7 +46,7 @@
 
 ## Version 0.2.0
 
-- Implement cross-search feature, nearust can now look for pairs of similar
+- Implement cross-search feature, symscan can now look for pairs of similar
   strings across two inputs
 - Further performance optimisations
 

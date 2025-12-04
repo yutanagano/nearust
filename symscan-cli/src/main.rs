@@ -1,27 +1,24 @@
 use clap::{ArgAction, Parser};
-use nearust::{
-    compute_dists, get_candidates_cross, get_candidates_within, get_input_lines_as_ascii,
-    write_true_hits, MaxDistance,
-};
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind::InvalidData, Write};
 use std::process;
+use symscan::{symdel_cross, symdel_within, NeighbourPairs};
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
 ///
-/// If you provide nearust with a path to a [FILE_QUERY], it will read its contents for input. If
-/// no path is supplied, nearust will read from the standard input until it receives an EOF signal.
-/// Nearust will then look for pairs of similar strings within its input, where each line of text
-/// is treated as an individual string. You can also supply nearust with two paths -- a
+/// If you provide symscan with a path to a [FILE_QUERY], it will read its contents for input. If
+/// no path is supplied, symscan will read from the standard input until it receives an EOF signal.
+/// Symscan will then look for pairs of similar strings within its input, where each line of text
+/// is treated as an individual string. You can also supply symscan with two paths -- a
 /// [FILE_QUERY] and [FILE_REFERENCE], in which case the program will look for pairs of similar
 /// strings across the contents of the two files. Currently, only valid ASCII input is supported.
 ///
 /// By default, the threshold (Levenshtein) edit distance at or below which a pair of strings are
 /// considered similar is set at 1. This can be changed by setting the --max-distance option.
 ///
-/// Nearust's output is plain text, where each line encodes a detected pair of similar input
+/// Symscan's output is plain text, where each line encodes a detected pair of similar input
 /// strings. Each line is comprised of three integers separated by commas, which represent, in
 /// respective order: the (1-indexed) line number of the string from the primary input (i.e. stdin
 /// or [FILE_QUERY]), the (1-indexed) line number of the string from the secondary input (i.e.
@@ -93,46 +90,20 @@ fn main() {
                     eprintln!("(from {}) {}", &path, e);
                     process::exit(1);
                 });
-            let max_distance = MaxDistance::try_from(args.max_distance).unwrap_or_else(|e| {
-                eprintln!("{}", e);
-                process::exit(1)
-            });
 
-            let candidates = get_candidates_cross(&primary_input, &comparison_input, max_distance)
+            let hits = symdel_cross(&primary_input, &comparison_input, args.max_distance)
                 .unwrap_or_else(|e| {
                     eprintln!("{}", e);
                     process::exit(1)
                 });
-            let dists = compute_dists(&candidates, &primary_input, &comparison_input, max_distance);
-
-            write_true_hits(
-                &candidates,
-                &dists,
-                max_distance,
-                args.zero_index,
-                &mut stdout,
-            );
+            write_true_hits(hits, args.zero_index, &mut stdout);
         }
         None => {
-            let max_distance = MaxDistance::try_from(args.max_distance).unwrap_or_else(|e| {
+            let hits = symdel_within(&primary_input, args.max_distance).unwrap_or_else(|e| {
                 eprintln!("{}", e);
                 process::exit(1)
             });
-
-            let candidates =
-                get_candidates_within(&primary_input, max_distance).unwrap_or_else(|e| {
-                    eprintln!("{}", e);
-                    process::exit(1)
-                });
-            let dists = compute_dists(&candidates, &primary_input, &primary_input, max_distance);
-
-            write_true_hits(
-                &candidates,
-                &dists,
-                max_distance,
-                args.zero_index,
-                &mut stdout,
-            );
+            write_true_hits(hits, args.zero_index, &mut stdout);
         }
     };
 }
@@ -144,4 +115,99 @@ fn get_file_bufreader(path: &str) -> BufReader<File> {
         process::exit(1)
     });
     BufReader::new(file)
+}
+
+/// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
+/// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
+/// is guaranteed to only contain ASCII bytes.
+pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
+    let mut strings = Vec::new();
+
+    for (idx, line) in in_stream.lines().enumerate() {
+        let line_unwrapped = line?;
+
+        if !line_unwrapped.is_ascii() {
+            let err_msg = format!(
+                "non-ASCII data is currently unsupported (\"{}\" from input line {})",
+                line_unwrapped,
+                idx + 1
+            );
+            return Err(Error::new(InvalidData, err_msg));
+        }
+
+        strings.push(line_unwrapped);
+    }
+
+    Ok(strings)
+}
+
+/// Write to stdout
+pub fn write_true_hits(hits: NeighbourPairs, zero_index: bool, writer: &mut impl Write) {
+    for idx in 0..hits.len() {
+        if zero_index {
+            write!(
+                writer,
+                "{},{},{}\n",
+                hits.row[idx], hits.col[idx], hits.dists[idx]
+            )
+            .unwrap();
+        } else {
+            write!(
+                writer,
+                "{},{},{}\n",
+                hits.row[idx] + 1,
+                hits.col[idx] + 1,
+                hits.dists[idx]
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_input_lines_as_ascii() {
+        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes())
+            .expect("input is valid ASCII");
+        let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
+        assert_eq!(strings, expected);
+    }
+
+    #[test]
+    fn test_get_input_lines_as_ascii_rejects_non_ascii() {
+        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nバズ\n".as_bytes());
+        assert!(matches!(strings, Err(_)));
+    }
+
+    #[test]
+    fn test_write_true_hits() {
+        let cases = [
+            (
+                NeighbourPairs {
+                    row: vec![0, 1],
+                    col: vec![1, 2],
+                    dists: vec![1, 1],
+                },
+                "0,1,1\n1,2,1\n",
+            ),
+            (
+                NeighbourPairs {
+                    row: vec![0, 0, 0, 1],
+                    col: vec![1, 2, 3, 2],
+                    dists: vec![1, 2, 2, 1],
+                },
+                "0,1,1\n0,2,2\n0,3,2\n1,2,1\n",
+            ),
+        ];
+        let mut test_output_stream = Vec::new();
+
+        for (hits, expected) in cases {
+            write_true_hits(hits, true, &mut test_output_stream);
+            assert_eq!(test_output_stream, expected.as_bytes());
+            test_output_stream.clear();
+        }
+    }
 }

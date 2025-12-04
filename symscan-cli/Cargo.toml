@@ -1,0 +1,13 @@
+[package]
+name = "symscan-cli"
+authors = ["Yuta Nagano"]
+version = "0.6.1"
+edition = "2021"
+description = "Fast detection of similar strings"
+# repository = "https://github.com/yutanagano/symscan"
+# homepage = "https://github.com/yutanagano/symscan"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+symscan = { version = "0.6.1", path = "../symscan/" }
+rayon = "1.10"

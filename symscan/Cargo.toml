@@ -1,0 +1,22 @@
+[package]
+name = "symscan"
+authors = ["Yuta Nagano"]
+version = "0.6.1"
+edition = "2021"
+description = "Fast detection of similar strings in bulk"
+# repository = "https://github.com/yutanagano/symscan"
+# homepage = "https://github.com/yutanagano/symscan"
+
+[dependencies]
+itertools = "0.13"
+rapidfuzz = "0.5"
+rayon = "1.10"
+hashbrown = { version = "0.16", features = ["rayon"] }
+foldhash = "0.2"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "benchmark"
+harness = false
