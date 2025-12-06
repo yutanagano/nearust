@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::{self, BufRead, Cursor};
-use symscan::{symdel_cross, symdel_within, CachedSymdel};
+use symscan::{symdel_cross, symdel_within, CachedRef};
 
 static QUERY_BYTES: &[u8] = include_bytes!("../../test_files/cdr3b_10k_a.txt");
 static REFERENCE_BYTES: &[u8] = include_bytes!("../../test_files/cdr3b_10k_b.txt");
@@ -15,8 +15,8 @@ fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
 fn setup_benchmarks(c: &mut Criterion) {
     let query = bytes_as_ascii_lines(QUERY_BYTES);
     let reference = bytes_as_ascii_lines(REFERENCE_BYTES);
-    let cached_query = CachedSymdel::new(&query, 1).expect("short input");
-    let cached_reference = CachedSymdel::new(&reference, 1).expect("short input");
+    let cached_query = CachedRef::new(&query, 1).expect("short input");
+    let cached_reference = CachedRef::new(&reference, 1).expect("short input");
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
@@ -50,7 +50,7 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("cached instantiation", |b| {
         b.iter(|| {
-            let _ = CachedSymdel::new(&reference, 1);
+            let _ = CachedRef::new(&reference, 1);
         })
     });
 }

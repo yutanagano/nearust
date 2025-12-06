@@ -3,7 +3,7 @@ use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind::InvalidData, Write};
 use std::process;
-use symscan::{symdel_cross, symdel_within, NeighbourPairs};
+use symscan::{symdel_cross, symdel_within, SparseDistMatrix};
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
@@ -142,7 +142,7 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
 }
 
 /// Write to stdout
-pub fn write_true_hits(hits: NeighbourPairs, zero_index: bool, writer: &mut impl Write) {
+pub fn write_true_hits(hits: SparseDistMatrix, zero_index: bool, writer: &mut impl Write) {
     for idx in 0..hits.len() {
         if zero_index {
             write!(
@@ -186,7 +186,7 @@ mod tests {
     fn test_write_true_hits() {
         let cases = [
             (
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -194,7 +194,7 @@ mod tests {
                 "0,1,1\n1,2,1\n",
             ),
             (
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],

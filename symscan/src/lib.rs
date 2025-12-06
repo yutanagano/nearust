@@ -3,15 +3,54 @@ use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
+use std::fmt::Display;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{self, Error, ErrorKind::InvalidData};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::{ptr, str, u8, usize};
+use thiserror;
 use utils::{CrossIndex, MaxDistance};
 
+#[derive(Debug)]
+pub enum InputType {
+    Query,
+    Reference,
+}
+
+impl Display for InputType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            InputType::Query => "query",
+            InputType::Reference => "reference",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("non-ASCII input currently unsupported (from index {row_num}: '{offending_string}')")]
+    NonAsciiInput {
+        row_num: usize,
+        offending_string: String,
+    },
+
+    #[error("{input_type} must not hold more than {limit} elements, got {count}")]
+    TooManyStrings {
+        input_type: InputType,
+        count: usize,
+        limit: usize,
+    },
+
+    #[error("max_distance is capped at {limit}, got {illegal}", limit = u8::MAX - 1, illegal = u8::MAX)]
+    MaxDistCapped,
+
+    #[error("CachedRef instance not compatible with max_distance above {limit}, got {got}")]
+    MaxDistTooLargeForCache { got: u8, limit: u8 },
+}
+
 mod utils {
-    use std::io::{Error, ErrorKind::InvalidData};
+    use super::Error;
 
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
     pub struct MaxDistance(u8);
@@ -31,10 +70,7 @@ mod utils {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             if value == u8::MAX {
-                Err(Error::new(
-                    InvalidData,
-                    format!("max_distance must be less than {} (got {})", u8::MAX, value),
-                ))
+                Err(Error::MaxDistCapped)
             } else {
                 Ok(Self(value))
             }
@@ -118,13 +154,13 @@ impl Span {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct NeighbourPairs {
+pub struct SparseDistMatrix {
     pub row: Vec<u32>,
     pub col: Vec<u32>,
     pub dists: Vec<u8>,
 }
 
-impl NeighbourPairs {
+impl SparseDistMatrix {
     pub fn len(&self) -> usize {
         self.row.len()
     }
@@ -139,12 +175,12 @@ impl NeighbourPairs {
 /// # Examples
 ///
 /// ```
-/// use symscan::{CachedSymdel, NeighbourPairs};
+/// use symscan::{CachedRef, SparseDistMatrix};
 ///
 /// let reference = ["fooo", "barr", "bazz", "buzz"];
-/// let cached = CachedSymdel::new(&reference, 1).expect("valid reference");
+/// let cached = CachedRef::new(&reference, 1).expect("valid reference");
 ///
-/// let NeighbourPairs { row, col, dists } = cached
+/// let SparseDistMatrix { row, col, dists } = cached
 ///     .symdel_cross(&["fizz", "fuzz", "buzz"], 1)
 ///     .expect("valid query");
 ///
@@ -152,7 +188,7 @@ impl NeighbourPairs {
 /// assert_eq!(col, vec![3, 2, 3]);
 /// assert_eq!(dists, vec![1, 1, 0]);
 /// ```
-pub struct CachedSymdel {
+pub struct CachedRef {
     str_store: Vec<u8>,
     str_spans: Vec<Span>,
     index_store: Vec<u32>,
@@ -160,17 +196,14 @@ pub struct CachedSymdel {
     max_distance: MaxDistance,
 }
 
-impl CachedSymdel {
-    pub fn new(reference: &[impl AsRef<str> + Sync], max_distance: u8) -> io::Result<Self> {
+impl CachedRef {
+    pub fn new(reference: &[impl AsRef<str> + Sync], max_distance: u8) -> Result<Self, Error> {
         if reference.len() > u32::MAX as usize {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "reference must not hold more than {} elements, got {}",
-                    u32::MAX,
-                    reference.len(),
-                ),
-            ));
+            return Err(Error::TooManyStrings {
+                input_type: InputType::Reference,
+                count: reference.len(),
+                limit: u32::MAX as usize,
+            });
         }
         let max_distance = MaxDistance::try_from(max_distance)?;
 
@@ -268,7 +301,7 @@ impl CachedSymdel {
             variant_map.entry(v_hash).insert(index_range);
         }
 
-        Ok(CachedSymdel {
+        Ok(CachedRef {
             str_store,
             str_spans,
             index_store,
@@ -277,10 +310,13 @@ impl CachedSymdel {
         })
     }
 
-    pub fn symdel_within(&self, max_distance: u8) -> io::Result<NeighbourPairs> {
+    pub fn symdel_within(&self, max_distance: u8) -> Result<SparseDistMatrix, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: self.max_distance.as_u8(),
+            });
         }
 
         let mut convergent_indices = Vec::with_capacity(self.variant_map.len());
@@ -301,20 +337,20 @@ impl CachedSymdel {
         &self,
         query: &[impl AsRef<str> + Sync],
         max_distance: u8,
-    ) -> io::Result<NeighbourPairs> {
+    ) -> Result<SparseDistMatrix, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: self.max_distance.as_u8(),
+            });
         }
         if query.len() > u32::MAX as usize {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "query must not hold more than {} elements, got {}",
-                    u32::MAX,
-                    query.len(),
-                ),
-            ));
+            return Err(Error::TooManyStrings {
+                input_type: InputType::Query,
+                count: query.len(),
+                limit: u32::MAX as usize,
+            });
         }
 
         let (q_idx_store, convergence_groups) = {
@@ -403,23 +439,19 @@ impl CachedSymdel {
         &self,
         query: &Self,
         max_distance: u8,
-    ) -> io::Result<NeighbourPairs> {
+    ) -> Result<SparseDistMatrix, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: self.max_distance.as_u8(),
+            });
         }
         if max_distance > query.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance.as_u8(), query.max_distance.as_u8())));
-        }
-        if query.str_spans.len() > u32::MAX as usize {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "query must not hold more than {} elements, got {}",
-                    u32::MAX,
-                    query.str_spans.len(),
-                ),
-            ));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: query.max_distance.as_u8(),
+            });
         }
 
         let convergence_groups = if query.variant_map.len() < self.variant_map.len() {
@@ -551,16 +583,13 @@ impl CachedSymdel {
 pub fn symdel_within(
     query: &[impl AsRef<str> + Sync],
     max_distance: u8,
-) -> io::Result<NeighbourPairs> {
+) -> Result<SparseDistMatrix, Error> {
     if query.len() > u32::MAX as usize {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "query must not hold more than {} elements, got {}",
-                u32::MAX,
-                query.len(),
-            ),
-        ));
+        return Err(Error::TooManyStrings {
+            input_type: InputType::Query,
+            count: query.len(),
+            limit: u32::MAX as usize,
+        });
     }
     let max_distance = MaxDistance::try_from(max_distance)?;
 
@@ -634,26 +663,20 @@ pub fn symdel_cross(
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
     max_distance: u8,
-) -> io::Result<NeighbourPairs> {
-    if query.len() > CrossIndex::MAX {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "query must not hold more than {} elements, got {}",
-                u32::MAX,
-                query.len(),
-            ),
-        ));
+) -> Result<SparseDistMatrix, Error> {
+    if query.len() > CrossIndex::MAX as usize {
+        return Err(Error::TooManyStrings {
+            input_type: InputType::Query,
+            count: query.len(),
+            limit: CrossIndex::MAX as usize,
+        });
     }
-    if reference.len() > CrossIndex::MAX {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "reference must not hold more than {} elements, got {}",
-                u32::MAX,
-                reference.len(),
-            ),
-        ));
+    if reference.len() > CrossIndex::MAX as usize {
+        return Err(Error::TooManyStrings {
+            input_type: InputType::Reference,
+            count: reference.len(),
+            limit: CrossIndex::MAX as usize,
+        });
     }
     let max_distance = MaxDistance::try_from(max_distance)?;
 
@@ -1044,7 +1067,7 @@ fn collect_true_hits(
     hit_candidates: &[(u32, u32)],
     dists: &[u8],
     max_distance: MaxDistance,
-) -> NeighbourPairs {
+) -> SparseDistMatrix {
     let mut qi_filtered = Vec::with_capacity(dists.len());
     let mut ri_filtered = Vec::with_capacity(dists.len());
     let mut dists_filtered = Vec::with_capacity(dists.len());
@@ -1062,7 +1085,7 @@ fn collect_true_hits(
     ri_filtered.shrink_to_fit();
     dists_filtered.shrink_to_fit();
 
-    NeighbourPairs {
+    SparseDistMatrix {
         row: qi_filtered,
         col: ri_filtered,
         dists: dists_filtered,
@@ -1072,7 +1095,7 @@ fn collect_true_hits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, Cursor};
+    use std::io::{self, BufRead, Cursor};
 
     // component tests
 
@@ -1142,7 +1165,7 @@ mod tests {
                 (0..5).tuple_combinations().collect_vec(),
                 vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
                 MaxDistance::try_from(1).expect("legal"),
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -1152,7 +1175,7 @@ mod tests {
                 (0..5).tuple_combinations().collect_vec(),
                 vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
                 MaxDistance::try_from(2).expect("legal"),
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],
@@ -1171,7 +1194,7 @@ mod tests {
         let cases = [
             (
                 1,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -1179,7 +1202,7 @@ mod tests {
             ),
             (
                 2,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],
@@ -1194,11 +1217,11 @@ mod tests {
 
     #[test]
     fn test_symdel_within_cached() {
-        let cached = CachedSymdel::new(&TEST_QUERY, 2).expect("short input");
+        let cached = CachedRef::new(&TEST_QUERY, 2).expect("short input");
         let cases = [
             (
                 1,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -1206,7 +1229,7 @@ mod tests {
             ),
             (
                 2,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],
@@ -1224,7 +1247,7 @@ mod tests {
         let cases = [
             (
                 1,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![2, 2],
                     dists: vec![0, 1],
@@ -1232,7 +1255,7 @@ mod tests {
             ),
             (
                 2,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 1, 2, 3, 4],
                     col: vec![0, 2, 2, 2, 2, 1],
                     dists: vec![2, 0, 1, 2, 2, 2],
@@ -1247,11 +1270,11 @@ mod tests {
 
     #[test]
     fn test_get_candidates_cross_partially_cached() {
-        let cached = CachedSymdel::new(&TEST_REF, 2).expect("short input");
+        let cached = CachedRef::new(&TEST_REF, 2).expect("short input");
         let cases = [
             (
                 1,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![2, 2],
                     dists: vec![0, 1],
@@ -1259,7 +1282,7 @@ mod tests {
             ),
             (
                 2,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 1, 2, 3, 4],
                     col: vec![0, 2, 2, 2, 2, 1],
                     dists: vec![2, 0, 1, 2, 2, 2],
@@ -1276,12 +1299,12 @@ mod tests {
 
     #[test]
     fn test_get_candidates_cross_fully_cached() {
-        let cached_q = CachedSymdel::new(&TEST_QUERY, 2).expect("short input");
-        let cached_r = CachedSymdel::new(&TEST_REF, 2).expect("short input");
+        let cached_q = CachedRef::new(&TEST_QUERY, 2).expect("short input");
+        let cached_r = CachedRef::new(&TEST_REF, 2).expect("short input");
         let cases = [
             (
                 1,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 1],
                     col: vec![2, 2],
                     dists: vec![0, 1],
@@ -1289,7 +1312,7 @@ mod tests {
             ),
             (
                 2,
-                NeighbourPairs {
+                SparseDistMatrix {
                     row: vec![0, 0, 1, 2, 3, 4],
                     col: vec![0, 2, 2, 2, 2, 1],
                     dists: vec![2, 0, 1, 2, 2, 2],
@@ -1321,7 +1344,7 @@ mod tests {
             .expect("test files have valid lines")
     }
 
-    fn bytes_as_neighbour_pairs(bytes: &[u8]) -> NeighbourPairs {
+    fn bytes_as_neighbour_pairs(bytes: &[u8]) -> SparseDistMatrix {
         let mut i = Vec::new();
         let mut j = Vec::new();
         let mut dists = Vec::new();
@@ -1348,7 +1371,7 @@ mod tests {
             );
         });
 
-        NeighbourPairs {
+        SparseDistMatrix {
             row: i,
             col: j,
             dists,
@@ -1381,7 +1404,7 @@ mod tests {
     #[test]
     fn test_within_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
-        let cached = CachedSymdel::new(&query, 2).expect("short input");
+        let cached = CachedRef::new(&query, 2).expect("short input");
 
         let hits = cached.symdel_within(1).expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_1));
@@ -1394,7 +1417,7 @@ mod tests {
     fn test_cross_partially_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-        let cached = CachedSymdel::new(&reference, 2).expect("short input");
+        let cached = CachedRef::new(&reference, 2).expect("short input");
 
         let hits = cached.symdel_cross(&query, 1).expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
@@ -1407,8 +1430,8 @@ mod tests {
     fn test_cross_fully_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-        let cached_query = CachedSymdel::new(&query, 2).expect("short input");
-        let cached_reference = CachedSymdel::new(&reference, 2).expect("short input");
+        let cached_query = CachedRef::new(&query, 2).expect("short input");
+        let cached_reference = CachedRef::new(&reference, 2).expect("short input");
 
         let hits = cached_reference
             .symdel_cross_against_cached(&cached_query, 1)

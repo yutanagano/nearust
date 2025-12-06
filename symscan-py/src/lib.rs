@@ -4,7 +4,7 @@ use pyo3::{
     prelude::*,
     types::{PyString, PyTuple},
 };
-use symscan::{symdel_cross, symdel_within, CachedSymdel as CSInternal, NeighbourPairs};
+use symscan::{symdel_cross, symdel_within, CachedRef as CSInternal, SparseDistMatrix};
 
 /// A memoized implementation of symdel.
 ///
@@ -35,7 +35,8 @@ impl CachedSymdel {
         let ref_views = get_str_refs(&ref_handles)?;
         check_strings_ascii(&ref_views)?;
 
-        let internal = CSInternal::new(&ref_views, max_distance).map_err(PyValueError::new_err)?;
+        let internal = CSInternal::new(&ref_views, max_distance)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         Ok(CachedSymdel { internal })
     }
@@ -152,18 +153,18 @@ impl CachedSymdel {
         max_distance: u8,
         zero_index: bool,
     ) -> PyResult<Bound<'py, PyTuple>> {
-        let NeighbourPairs { row, col, dists } = match query {
+        let SparseDistMatrix { row, col, dists } = match query {
             Some(q_given) => {
                 if let Ok(cached) = q_given.cast::<CachedSymdel>() {
                     self.internal
                         .symdel_cross_against_cached(&cached.borrow().internal, max_distance)
-                        .map_err(PyValueError::new_err)?
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else if let Ok(iterable) = q_given.try_iter() {
                     let query_handles = get_pystring_handles(&iterable)?;
                     let query_views = get_str_refs(&query_handles)?;
                     self.internal
                         .symdel_cross(&query_views, max_distance)
-                        .map_err(PyValueError::new_err)?
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else {
                     let type_name = q_given
                         .get_type()
@@ -178,7 +179,7 @@ impl CachedSymdel {
             None => self
                 .internal
                 .symdel_within(max_distance)
-                .map_err(PyValueError::new_err)?,
+                .map_err(|e| PyValueError::new_err(e.to_string()))?,
         };
 
         PyTuple::new(
@@ -281,14 +282,16 @@ fn symdel<'py>(
     let query_views = get_str_refs(&query_handles)?;
     check_strings_ascii(&query_views)?;
 
-    let NeighbourPairs { row, col, dists } = match reference {
+    let SparseDistMatrix { row, col, dists } = match reference {
         Some(ref_given) => {
             let ref_handles = get_pystring_handles(&ref_given)?;
             let ref_views = get_str_refs(&ref_handles)?;
             check_strings_ascii(&ref_views)?;
-            symdel_cross(&query_views, &ref_views, max_distance).map_err(PyValueError::new_err)?
+            symdel_cross(&query_views, &ref_views, max_distance)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
         }
-        None => symdel_within(&query_views, max_distance).map_err(PyValueError::new_err)?,
+        None => symdel_within(&query_views, max_distance)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
     };
 
     PyTuple::new(
