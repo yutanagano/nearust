@@ -4,7 +4,9 @@ use pyo3::{
     prelude::*,
     types::{PyString, PyTuple},
 };
-use symscan::{symdel_cross, symdel_within, CachedRef as CSInternal, SparseDistMatrix};
+use symscan::{
+    get_neighbors_across, get_neighbors_within, CachedRef as CRInternal, Error, SparseDistMatrix,
+};
 
 /// A memoized implementation of symdel.
 ///
@@ -22,12 +24,12 @@ use symscan::{symdel_cross, symdel_within, CachedRef as CSInternal, SparseDistMa
 ///     is set to X at construction, later calls to this instance's symdel
 ///     method will only be accept `max_distance` less than or equal to X.
 #[pyclass]
-struct CachedSymdel {
-    internal: CSInternal,
+struct CachedRef {
+    internal: CRInternal,
 }
 
 #[pymethods]
-impl CachedSymdel {
+impl CachedRef {
     #[new]
     #[pyo3(signature = (reference, max_distance = 1))]
     fn new(reference: &Bound<PyAny>, max_distance: u8) -> PyResult<Self> {
@@ -35,10 +37,10 @@ impl CachedSymdel {
         let ref_views = get_str_refs(&ref_handles)?;
         check_strings_ascii(&ref_views)?;
 
-        let internal = CSInternal::new(&ref_views, max_distance)
+        let internal = CRInternal::new(&ref_views, max_distance)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        Ok(CachedSymdel { internal })
+        Ok(CachedRef { internal })
     }
 
     /// Detect pairs of similar strings.
@@ -52,9 +54,6 @@ impl CachedSymdel {
     ///     specified when constructing the caller instance (as well as that
     ///     when constructing `query`, if `query` is set to a CachedSymdel
     ///     instance).
-    /// zero_index : bool, default=True
-    ///     If set to True, reports the indices of strings of interest using
-    ///     0-based indexing. Otherwise uses 1-based indexing.
     ///
     /// Returns
     /// -------
@@ -145,25 +144,27 @@ impl CachedSymdel {
     /// >>> dists
     /// array([2, 2, 2, 1, 1, 0], dtype=uint8)
     /// >>> # max_distance > 2 will throw an error!: cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=3)
-    #[pyo3(signature = (query = None, max_distance = 1, zero_index = true))]
-    fn symdel<'py>(
+    #[pyo3(signature = (query = None, max_distance = 1))]
+    fn get_neighbors<'py>(
         &self,
         py: Python<'py>,
         query: Option<&Bound<'py, PyAny>>,
         max_distance: u8,
-        zero_index: bool,
     ) -> PyResult<Bound<'py, PyTuple>> {
         let SparseDistMatrix { row, col, dists } = match query {
             Some(q_given) => {
-                if let Ok(cached) = q_given.cast::<CachedSymdel>() {
+                if let Ok(cached) = q_given.cast::<CachedRef>() {
                     self.internal
-                        .symdel_cross_against_cached(&cached.borrow().internal, max_distance)
+                        .get_neighbors_across_against_cached(
+                            &cached.borrow().internal,
+                            max_distance,
+                        )
                         .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else if let Ok(iterable) = q_given.try_iter() {
                     let query_handles = get_pystring_handles(&iterable)?;
                     let query_views = get_str_refs(&query_handles)?;
                     self.internal
-                        .symdel_cross(&query_views, max_distance)
+                        .get_neighbors_across(&query_views, max_distance)
                         .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else {
                     let type_name = q_given
@@ -178,7 +179,7 @@ impl CachedSymdel {
             }
             None => self
                 .internal
-                .symdel_within(max_distance)
+                .get_neighbors_within(max_distance)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?,
         };
 
@@ -201,9 +202,6 @@ impl CachedSymdel {
 /// reference : iterable of str, optional
 /// max_distance : int, default=1
 ///     The maximum edit distance at which strings are considered neighbors.
-/// zero_index : bool, default=True
-///     If set to True, reports the indices of strings of interest using
-///     0-based indexing. Otherwise uses 1-based indexing.
 ///
 /// Returns
 /// -------
@@ -257,26 +255,13 @@ impl CachedSymdel {
 /// array([3, 2, 3], dtype=uint32)
 /// >>> dists
 /// array([1, 1, 0], dtype=uint8)
-///
-/// If you would like the string indices returned to be 1-based instead of
-/// 0-based (in a manner similar to the default behaviour of the CLI), you can
-/// set `zero_index` to False.
-///
-/// >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
-/// >>> i
-/// array([1, 2], dtype=uint32)
-/// >>> j
-/// array([2, 3], dtype=uint32)
-/// >>> dists
-/// array([1, 1], dtype=uint8)
 #[pyfunction]
-#[pyo3(signature = (query, reference = None, max_distance = 1, zero_index = true))]
-fn symdel<'py>(
+#[pyo3(signature = (query, reference = None, max_distance = 1))]
+fn get_neighbors<'py>(
     py: Python<'py>,
     query: &Bound<'py, PyAny>,
     reference: Option<&Bound<'py, PyAny>>,
     max_distance: u8,
-    zero_index: bool,
 ) -> PyResult<Bound<'py, PyTuple>> {
     let query_handles = get_pystring_handles(&query)?;
     let query_views = get_str_refs(&query_handles)?;
@@ -287,10 +272,10 @@ fn symdel<'py>(
             let ref_handles = get_pystring_handles(&ref_given)?;
             let ref_views = get_str_refs(&ref_handles)?;
             check_strings_ascii(&ref_views)?;
-            symdel_cross(&query_views, &ref_views, max_distance)
+            get_neighbors_across(&query_views, &ref_views, max_distance)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?
         }
-        None => symdel_within(&query_views, max_distance)
+        None => get_neighbors_within(&query_views, max_distance)
             .map_err(|e| PyValueError::new_err(e.to_string()))?,
     };
 
@@ -325,11 +310,11 @@ fn get_str_refs<'py>(input: &'py [Bound<'py, PyString>]) -> PyResult<Vec<&'py st
 fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), PyErr> {
     for (idx, s) in strings.iter().enumerate() {
         if !s.as_ref().is_ascii() {
-            let err_msg = format!(
-                "non-ASCII strings are currently unsupported ('{}' at index {idx})",
-                s.as_ref()
-            );
-            return Err(PyValueError::new_err(err_msg));
+            let e = Error::NonAsciiInput {
+                row_num: idx,
+                offending_string: s.as_ref().to_string(),
+            };
+            return Err(PyValueError::new_err(e.to_string()));
         }
     }
     Ok(())
@@ -338,7 +323,7 @@ fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), PyErr> {
 /// Fast detection of similar strings
 #[pymodule(name = "symscan")]
 fn symscan_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(symdel, m)?)?;
-    m.add_class::<CachedSymdel>()?;
+    m.add_function(wrap_pyfunction!(get_neighbors, m)?)?;
+    m.add_class::<CachedRef>()?;
     Ok(())
 }

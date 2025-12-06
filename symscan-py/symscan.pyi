@@ -2,7 +2,7 @@ import numpy as np
 from numpy.typing import NDArray
 from typing import Iterable, Optional
 
-def symdel(
+def get_neighbors(
     query: Iterable[str],
     reference: Optional[Iterable[str]] = None,
     max_distance: int = 1,
@@ -17,9 +17,6 @@ def symdel(
     reference : iterable of str, optional
     max_distance : int, default=1
         The maximum edit distance at which strings are considered neighbors.
-    zero_index : bool, default=True
-        If set to True, reports the indices of strings of interest using
-        0-based indexing. Otherwise uses 1-based indexing.
 
     Returns
     -------
@@ -73,22 +70,10 @@ def symdel(
     array([3, 2, 3], dtype=uint32)
     >>> dists
     array([1, 1, 0], dtype=uint8)
-
-    If you would like the string indices returned to be 1-based instead of
-    0-based (in a manner similar to the default behaviour of the CLI), you can
-    set `zero_index` to False.
-
-    >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
-    >>> i
-    array([1, 2], dtype=uint32)
-    >>> j
-    array([2, 3], dtype=uint32)
-    >>> dists
-    array([1, 1], dtype=uint8)
     """
     ...
 
-class CachedSymdel:
+class CachedRef:
     """
     A memoized implementation of symdel.
 
@@ -108,11 +93,10 @@ class CachedSymdel:
     """
 
     def __init__(self, reference: Iterable[str], max_distance: int = 1) -> None: ...
-    def symdel(
+    def get_neighbors(
         self,
-        query: Iterable[str] | "CachedSymdel" | None = None,
+        query: Iterable[str] | "CachedRef" | None = None,
         max_distance: int = 1,
-        zero_index: bool = True,
     ) -> tuple[NDArray[np.uint32], NDArray[np.uint32], NDArray[np.uint8]]:
         """
         Detect pairs of similar strings.
@@ -126,9 +110,6 @@ class CachedSymdel:
             specified when constructing the caller instance (as well as that
             when constructing `query`, if `query` is set to a CachedSymdel
             instance).
-        zero_index : bool, default=True
-            If set to True, reports the indices of strings of interest using
-            0-based indexing. Otherwise uses 1-based indexing.
 
         Returns
         -------

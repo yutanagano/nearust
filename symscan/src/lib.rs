@@ -29,7 +29,7 @@ impl Display for InputType {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("non-ASCII input currently unsupported (from index {row_num}: '{offending_string}')")]
+    #[error("non-ASCII input currently unsupported ('{offending_string}' at {row_num})")]
     NonAsciiInput {
         row_num: usize,
         offending_string: String,
@@ -181,7 +181,7 @@ impl SparseDistMatrix {
 /// let cached = CachedRef::new(&reference, 1).expect("valid reference");
 ///
 /// let SparseDistMatrix { row, col, dists } = cached
-///     .symdel_cross(&["fizz", "fuzz", "buzz"], 1)
+///     .get_neighbors_across(&["fizz", "fuzz", "buzz"], 1)
 ///     .expect("valid query");
 ///
 /// assert_eq!(row, vec![1, 2, 2]);
@@ -310,7 +310,7 @@ impl CachedRef {
         })
     }
 
-    pub fn symdel_within(&self, max_distance: u8) -> Result<SparseDistMatrix, Error> {
+    pub fn get_neighbors_within(&self, max_distance: u8) -> Result<SparseDistMatrix, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
             return Err(Error::MaxDistTooLargeForCache {
@@ -333,7 +333,7 @@ impl CachedRef {
         Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
-    pub fn symdel_cross(
+    pub fn get_neighbors_across(
         &self,
         query: &[impl AsRef<str> + Sync],
         max_distance: u8,
@@ -435,7 +435,7 @@ impl CachedRef {
         Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
-    pub fn symdel_cross_against_cached(
+    pub fn get_neighbors_across_against_cached(
         &self,
         query: &Self,
         max_distance: u8,
@@ -580,7 +580,7 @@ impl CachedRef {
     }
 }
 
-pub fn symdel_within(
+pub fn get_neighbors_within(
     query: &[impl AsRef<str> + Sync],
     max_distance: u8,
 ) -> Result<SparseDistMatrix, Error> {
@@ -659,7 +659,7 @@ pub fn symdel_within(
     Ok(collect_true_hits(&candidates, &dists, max_distance))
 }
 
-pub fn symdel_cross(
+pub fn get_neighbors_across(
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
     max_distance: u8,
@@ -1210,7 +1210,7 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = symdel_within(&TEST_QUERY, mdist).expect("short input");
+            let result = get_neighbors_within(&TEST_QUERY, mdist).expect("short input");
             assert_eq!(result, expected);
         }
     }
@@ -1237,7 +1237,7 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = cached.symdel_within(mdist).expect("legal max dist");
+            let result = cached.get_neighbors_within(mdist).expect("legal max dist");
             assert_eq!(result, expected);
         }
     }
@@ -1263,7 +1263,7 @@ mod tests {
             ),
         ];
         for (mdist, expected) in cases {
-            let result = symdel_cross(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
+            let result = get_neighbors_across(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
             assert_eq!(result, expected);
         }
     }
@@ -1291,7 +1291,7 @@ mod tests {
         ];
         for (mdist, expected) in cases {
             let result = cached
-                .symdel_cross(&TEST_QUERY, mdist)
+                .get_neighbors_across(&TEST_QUERY, mdist)
                 .expect("legal max dist");
             assert_eq!(result, expected);
         }
@@ -1321,7 +1321,7 @@ mod tests {
         ];
         for (mdist, expected) in cases {
             let result = cached_r
-                .symdel_cross_against_cached(&cached_q, mdist)
+                .get_neighbors_across_against_cached(&cached_q, mdist)
                 .expect("legal max dist");
             assert_eq!(result, expected);
         }
@@ -1382,10 +1382,10 @@ mod tests {
     fn test_within() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
 
-        let hits = symdel_within(&query, 1).expect("short input");
+        let hits = get_neighbors_within(&query, 1).expect("short input");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_1));
 
-        let hits = symdel_within(&query, 2).expect("short input");
+        let hits = get_neighbors_within(&query, 2).expect("short input");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_2));
     }
 
@@ -1394,10 +1394,10 @@ mod tests {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
 
-        let hits = symdel_cross(&query, &reference, 1).expect("valid inputs");
+        let hits = get_neighbors_across(&query, &reference, 1).expect("valid inputs");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
-        let hits = symdel_cross(&query, &reference, 2).expect("valid inputs");
+        let hits = get_neighbors_across(&query, &reference, 2).expect("valid inputs");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }
 
@@ -1406,10 +1406,10 @@ mod tests {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let cached = CachedRef::new(&query, 2).expect("short input");
 
-        let hits = cached.symdel_within(1).expect("legal max distance");
+        let hits = cached.get_neighbors_within(1).expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_1));
 
-        let hits = cached.symdel_within(2).expect("legal max distance");
+        let hits = cached.get_neighbors_within(2).expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_2));
     }
 
@@ -1419,10 +1419,14 @@ mod tests {
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
         let cached = CachedRef::new(&reference, 2).expect("short input");
 
-        let hits = cached.symdel_cross(&query, 1).expect("legal max distance");
+        let hits = cached
+            .get_neighbors_across(&query, 1)
+            .expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
-        let hits = cached.symdel_cross(&query, 2).expect("legal max distance");
+        let hits = cached
+            .get_neighbors_across(&query, 2)
+            .expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }
 
@@ -1434,12 +1438,12 @@ mod tests {
         let cached_reference = CachedRef::new(&reference, 2).expect("short input");
 
         let hits = cached_reference
-            .symdel_cross_against_cached(&cached_query, 1)
+            .get_neighbors_across_against_cached(&cached_query, 1)
             .expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
         let hits = cached_reference
-            .symdel_cross_against_cached(&cached_query, 2)
+            .get_neighbors_across_against_cached(&cached_query, 2)
             .expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }

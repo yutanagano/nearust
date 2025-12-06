@@ -3,7 +3,7 @@ use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind::InvalidData, Write};
 use std::process;
-use symscan::{symdel_cross, symdel_within, SparseDistMatrix};
+use symscan::{get_neighbors_across, get_neighbors_within, SparseDistMatrix};
 
 /// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
 /// threshold edit distance.
@@ -65,7 +65,7 @@ fn main() {
             process::exit(1);
         });
 
-    let primary_input = match args.file_query {
+    let query = match args.file_query {
         Some(path) => {
             let reader = get_file_bufreader(&path);
             get_input_lines_as_ascii(reader).unwrap_or_else(|e| {
@@ -84,22 +84,21 @@ fn main() {
 
     match args.file_reference {
         Some(path) => {
-            let comparison_reader = get_file_bufreader(&path);
-            let comparison_input =
-                get_input_lines_as_ascii(comparison_reader).unwrap_or_else(|e| {
-                    eprintln!("(from {}) {}", &path, e);
-                    process::exit(1);
-                });
+            let ref_reader = get_file_bufreader(&path);
+            let ref_input = get_input_lines_as_ascii(ref_reader).unwrap_or_else(|e| {
+                eprintln!("(from {}) {}", &path, e);
+                process::exit(1);
+            });
 
-            let hits = symdel_cross(&primary_input, &comparison_input, args.max_distance)
-                .unwrap_or_else(|e| {
+            let hits =
+                get_neighbors_across(&query, &ref_input, args.max_distance).unwrap_or_else(|e| {
                     eprintln!("{}", e);
                     process::exit(1)
                 });
             write_true_hits(hits, args.zero_index, &mut stdout);
         }
         None => {
-            let hits = symdel_within(&primary_input, args.max_distance).unwrap_or_else(|e| {
+            let hits = get_neighbors_within(&query, args.max_distance).unwrap_or_else(|e| {
                 eprintln!("{}", e);
                 process::exit(1)
             });
@@ -120,7 +119,7 @@ fn get_file_bufreader(path: &str) -> BufReader<File> {
 /// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
 /// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
 /// is guaranteed to only contain ASCII bytes.
-pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
+fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
     let mut strings = Vec::new();
 
     for (idx, line) in in_stream.lines().enumerate() {
@@ -142,7 +141,7 @@ pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, 
 }
 
 /// Write to stdout
-pub fn write_true_hits(hits: SparseDistMatrix, zero_index: bool, writer: &mut impl Write) {
+fn write_true_hits(hits: SparseDistMatrix, zero_index: bool, writer: &mut impl Write) {
     for idx in 0..hits.len() {
         if zero_index {
             write!(

@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::{self, BufRead, Cursor};
-use symscan::{symdel_cross, symdel_within, CachedRef};
+use symscan::{get_neighbors_across, get_neighbors_within, CachedRef};
 
 static QUERY_BYTES: &[u8] = include_bytes!("../../test_files/cdr3b_10k_a.txt");
 static REFERENCE_BYTES: &[u8] = include_bytes!("../../test_files/cdr3b_10k_b.txt");
@@ -20,31 +20,31 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_within", |b| {
         b.iter(|| {
-            let _ = symdel_within(&query, 1);
+            let _ = get_neighbors_within(&query, 1);
         })
     });
 
     c.bench_function("get_candidates_cross", |b| {
         b.iter(|| {
-            let _ = symdel_cross(&query, &reference, 1);
+            let _ = get_neighbors_across(&query, &reference, 1);
         })
     });
 
     c.bench_function("get_candidates_within (cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_within(1);
+            let _ = cached_reference.get_neighbors_within(1);
         })
     });
 
     c.bench_function("get_candidates_cross (partially cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross(&query, 1);
+            let _ = cached_reference.get_neighbors_across(&query, 1);
         })
     });
 
     c.bench_function("get_candidates_cross (fully cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.symdel_cross_against_cached(&cached_query, 1);
+            let _ = cached_reference.get_neighbors_across_against_cached(&cached_query, 1);
         })
     });
 
