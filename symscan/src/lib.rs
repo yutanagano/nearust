@@ -11,6 +11,7 @@ use std::{ptr, str, u8, usize};
 use thiserror;
 use utils::{CrossIndex, MaxDistance};
 
+/// Used to specify the source of certain [`Error`] variants.
 #[derive(Debug)]
 pub enum InputType {
     Query,
@@ -27,24 +28,45 @@ impl Display for InputType {
     }
 }
 
+/// Symscan error variants.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("non-ASCII input currently unsupported ('{offending_string}' at {row_num})")]
+    /// An input collection contained references to at least one non-ASCII string.
+    #[error("non-ASCII input currently unsupported ('{offending_string}' at {offending_idx})")]
     NonAsciiInput {
-        row_num: usize,
+        input_type: InputType,
+        offending_idx: usize,
         offending_string: String,
     },
 
-    #[error("{input_type} must not hold more than {limit} elements, got {count}")]
+    /// An input collection contained more than the maximum allowed number of strings.
+    ///
+    /// In most cases, the maximum allowed length is [4,294,967,295](u32::MAX). This is because
+    /// internal computations use [`u32`]s to encode string indices. The exception is when calling
+    /// [`get_neighbors_across`], where the maximum is instead 2,147,483,647 ((2^31)-1) due to the
+    /// fact that one of the 32 bits is reserved for distinguishing between indexes of the `query`
+    /// slice and the `reference` slice.
+    #[error("{input_type} must not hold more than {limit} elements, got {got}")]
     TooManyStrings {
         input_type: InputType,
-        count: usize,
+        got: usize,
         limit: usize,
     },
 
+    /// The `max_distance` function / method parameter was set to [255](u8::MAX).
+    ///
+    /// This results in an error because that value is reserved for encoding when pairs exceed the
+    /// threshold distance during internal computations.
     #[error("max_distance is capped at {limit}, got {illegal}", limit = u8::MAX - 1, illegal = u8::MAX)]
     MaxDistCapped,
 
+    /// The `max_distance` method parameter was set to a value greater than that given when
+    /// constructing [`CachedRef`] being queried.
+    ///
+    /// This results in an error because the `max_distance` given at [`CachedRef`] construction
+    /// time determines how many `reference` string deletion variants are generated and cached in
+    /// the struct. A cache containing deletion variants to a depth of X cannot support symscan
+    /// queries with `max_distance` > X.
     #[error("CachedRef instance not compatible with max_distance above {limit}, got {got}")]
     MaxDistTooLargeForCache { got: u8, limit: u8 },
 }
@@ -160,6 +182,15 @@ impl Span {
 /// [`col`](NeighborPairs::col) contain the indices of the neighbor string pairs, and
 /// [`dists`](NeighborPairs::dists) contains the Levenshtein distances between the corresponding
 /// pairs.
+///
+/// # A note on double-counting pairs
+///
+/// When returning the results of [`get_neighbors_within`] / [`CachedRef::get_neighbors_within`],
+/// string pairs _**ARE NOT**_ double-counted. As seen in the
+/// [examples](get_neighbors_within#examples), each pair is represented once where the
+/// [`row`](NeighborPairs::row) index is always less than the [`col`](NeighborPairs::col) index. In
+/// other words, if you were to interpret the [`NeighborPairs`] in these situations as a sparse
+/// matrix, only the lower triangle will be filled.
 #[derive(Debug, PartialEq)]
 pub struct NeighborPairs {
     /// Indices of strings in the input `query` slice that have neighbors.
@@ -185,11 +216,21 @@ impl NeighborPairs {
     }
 }
 
-/// A memoized implementation of symdel.
+/// A struct for memoizing the deletion variant calculations for a string collection.
 ///
-/// An implementation of symdel where the deletion variant computations for the reference string
-/// set is memoized and stored in memory as a hashmap. This is useful for use-cases where you want
-/// to repeatedly query the same reference, especially if the reference is very large.
+/// When [constructed](CachedRef::new), [`CachedRef`] precomputes and stores the deletion variants
+/// for the supplied `reference` strings as a hashmap. This significantly speeds up subsequent
+/// queries against the reference, at the cost of spending extra time to construct the hashmap.
+/// This is useful for use-cases where you want to repeatedly query the same reference, especially
+/// if the reference is very large. However, for one-off computations, the pure functions
+/// [`get_neighbors_within`] and [`get_neighbors_across`] are faster.
+///
+/// **Note** that [`CachedRef`] instances constructed with `max_distance` set to X can only support
+/// queries with `max_distance` less than or equal to X.
+///
+/// **Note** when interpreting the index order of returned [`NeighborPairs`], the string collection
+/// specified at construction is considered the _reference_, and any string collections specified
+/// during subsequent query calls are considered the _query_.
 ///
 /// # Examples
 ///
@@ -197,15 +238,23 @@ impl NeighborPairs {
 /// use symscan::{CachedRef, NeighborPairs};
 ///
 /// let reference = ["fooo", "barr", "bazz", "buzz"];
-/// let cached = CachedRef::new(&reference, 1).expect("valid reference");
+/// let cached = CachedRef::new(&reference, 2).unwrap();
 ///
 /// let NeighborPairs { row, col, dists } = cached
 ///     .get_neighbors_across(&["fizz", "fuzz", "buzz"], 1)
-///     .expect("valid query");
+///     .unwrap();
 ///
-/// assert_eq!(row, vec![1, 2, 2]);
-/// assert_eq!(col, vec![3, 2, 3]);
+/// assert_eq!(row,   vec![1, 2, 2]);
+/// assert_eq!(col,   vec![3, 2, 3]);
 /// assert_eq!(dists, vec![1, 1, 0]);
+///
+/// let NeighborPairs { row, col, dists } = cached
+///     .get_neighbors_across(&["fizz", "fuzz", "buzz"], 2)
+///     .unwrap();
+///
+/// assert_eq!(row,   vec![0, 0, 1, 1, 2, 2]);
+/// assert_eq!(col,   vec![2, 3, 2, 3, 2, 3]);
+/// assert_eq!(dists, vec![2, 2, 2, 1, 1, 0]);
 /// ```
 pub struct CachedRef {
     str_store: Vec<u8>,
@@ -216,16 +265,17 @@ pub struct CachedRef {
 }
 
 impl CachedRef {
+    /// Construct a new [`CachedRef`] instance.
     pub fn new(reference: &[impl AsRef<str> + Sync], max_distance: u8) -> Result<Self, Error> {
         if reference.len() > u32::MAX as usize {
             return Err(Error::TooManyStrings {
                 input_type: InputType::Reference,
-                count: reference.len(),
+                got: reference.len(),
                 limit: u32::MAX as usize,
             });
         }
         let max_distance = MaxDistance::try_from(max_distance)?;
-        check_strings_ascii(reference)?;
+        check_strings_ascii(reference, InputType::Reference)?;
 
         let (str_store, str_spans) = {
             let strlens = reference.iter().map(|s| s.as_ref().len()).collect_vec();
@@ -330,6 +380,7 @@ impl CachedRef {
         })
     }
 
+    /// The memoized equivalent of [`get_neighbors_within`].
     pub fn get_neighbors_within(&self, max_distance: u8) -> Result<NeighborPairs, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
@@ -353,6 +404,7 @@ impl CachedRef {
         Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
+    /// The memoized equivalent of [`get_neighbors_across`].
     pub fn get_neighbors_across(
         &self,
         query: &[impl AsRef<str> + Sync],
@@ -368,11 +420,11 @@ impl CachedRef {
         if query.len() > u32::MAX as usize {
             return Err(Error::TooManyStrings {
                 input_type: InputType::Query,
-                count: query.len(),
+                got: query.len(),
                 limit: u32::MAX as usize,
             });
         }
-        check_strings_ascii(query)?;
+        check_strings_ascii(query, InputType::Query)?;
 
         let (q_idx_store, convergence_groups) = {
             let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
@@ -456,7 +508,9 @@ impl CachedRef {
         Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
-    pub fn get_neighbors_across_against_cached(
+    /// Equivalent to [`CachedRef::get_neighbors_across`], where the query is also a [`CachedRef`]
+    /// instance.
+    pub fn get_neighbors_across_cached(
         &self,
         query: &Self,
         max_distance: u8,
@@ -603,29 +657,19 @@ impl CachedRef {
 
 /// Detect string pairs within an input collection that lie within a threshold edit distance.
 ///
-/// The function considers all possible combinations (not permutations, see
-/// [below](#a-note-on-double-counting-pairs)) of string pairs from `query`, and returns all those
-/// where the two strings are no more than `max_distance` Levenshtein edit distance units apart.
-///
-/// # A note on double-counting pairs
-///
-/// The [`NeighborPairs`] struct returned via the [`Ok`] variant _**DOES NOT**_ double-count string
-/// pairs. As seen in the examples below, each pair is represented once where the `row` index is
-/// always less than the `col` index. In other words, if you were to interpret the
-/// [`NeighborPairs`] as a sparse matrix, only the lower triangle will be filled.
+/// The function considers all possible combinations (not permutations, [read
+/// more](NeighborPairs#a-note-on-double-counting-pairs)) of string pairs from `query`, and returns
+/// all those where the two strings are no more than `max_distance` Levenshtein edit distance units
+/// apart.
 ///
 /// # Errors
 ///
-/// Currently, the crate only supports ASCII input. This function will return
-/// [`Error::NonAsciiInput`] if `query` contains any references to non-ASCII data.
+/// Currently, the crate only supports ASCII input. The function will [`Err`] with
+/// [`Error::NonAsciiInput`] if `query` contains any non-ASCII data.
 ///
-/// There are two more ways the function can [`Err`], due to some hard limits on the magnitudes of
-/// the input arguments. However, note that in practice, runtime or memory usage are much more
-/// likely to be the limiting factor. Firstly, the function will return [`Error::TooManyStrings`]
-/// if `query` contains more than [4,294,967,295](u32::MAX) elements. This is because
-/// [`NeighborPairs`] uses [`u32`]s to encode string indices. Secondly, the function will return
-/// [`Error::MaxDistCapped`] if `max_distance` is set to [255](u8::MAX), as that value is reserved
-/// for encoding when pairs exceed the threshold distance during intermediate computations.
+/// There are some hard limits on the sizes of the input arguments (see [`Error::TooManyStrings`],
+/// [`Error::MaxDistCapped`]). Note however that in practice, runtime or memory usage is almost
+/// certainly the limiting factor instead.
 ///
 /// # Examples
 ///
@@ -652,12 +696,12 @@ pub fn get_neighbors_within(
     if query.len() > u32::MAX as usize {
         return Err(Error::TooManyStrings {
             input_type: InputType::Query,
-            count: query.len(),
+            got: query.len(),
             limit: u32::MAX as usize,
         });
     }
     let max_distance = MaxDistance::try_from(max_distance)?;
-    check_strings_ascii(query)?;
+    check_strings_ascii(query, InputType::Query)?;
 
     let (convergent_indices, group_sizes) = {
         let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
@@ -733,18 +777,12 @@ pub fn get_neighbors_within(
 ///
 /// # Errors
 ///
-/// Currently, the crate only supports ASCII input. This function will return
-/// [`Error::NonAsciiInput`] if `query` contains any references to non-ASCII data.
+/// Currently, the crate only supports ASCII input. The function will [`Err`] with
+/// [`Error::NonAsciiInput`] if `query` or `reference` contain any non-ASCII data.
 ///
-/// There are two more ways the function can [`Err`], due to some hard limits on the magnitudes of
-/// the input arguments. However, note that in practice, runtime or memory usage are much more
-/// likely to be the limiting factor. Firstly, the function will return [`Error::TooManyStrings`]
-/// if `query` contains more than 2,147,483,647 ((2^31)-1) elements. This is because internal
-/// computations use modified [`u32`]s to encode string indices, where one bit is reserved for
-/// distinguishing between the `query` slice and the `reference` slice. Secondly, the function will
-/// return [`Error::MaxDistCapped`] if `max_distance` is set to [255](u8::MAX), as that value is
-/// reserved for encoding when pairs exceed the threshold distance during intermediate
-/// computations.
+/// There are some hard limits on the sizes of the input arguments (see [`Error::TooManyStrings`],
+/// [`Error::MaxDistCapped`]). Note however that in practice, runtime or memory usage is almost
+/// certainly the limiting factor instead.
 ///
 /// # Examples
 ///
@@ -773,20 +811,20 @@ pub fn get_neighbors_across(
     if query.len() > CrossIndex::MAX as usize {
         return Err(Error::TooManyStrings {
             input_type: InputType::Query,
-            count: query.len(),
+            got: query.len(),
             limit: CrossIndex::MAX as usize,
         });
     }
     if reference.len() > CrossIndex::MAX as usize {
         return Err(Error::TooManyStrings {
             input_type: InputType::Reference,
-            count: reference.len(),
+            got: reference.len(),
             limit: CrossIndex::MAX as usize,
         });
     }
     let max_distance = MaxDistance::try_from(max_distance)?;
-    check_strings_ascii(query)?;
-    check_strings_ascii(reference)?;
+    check_strings_ascii(query, InputType::Query)?;
+    check_strings_ascii(reference, InputType::Reference)?;
 
     let (convergent_indices, group_sizes) = {
         let num_del_variants_q = get_num_del_vars_per_string(query, max_distance);
@@ -914,11 +952,12 @@ pub fn get_neighbors_across(
     Ok(collect_true_hits(&candidates, &dists, max_distance))
 }
 
-fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), Error> {
+fn check_strings_ascii(strings: &[impl AsRef<str>], input_type: InputType) -> Result<(), Error> {
     for (idx, s) in strings.iter().enumerate() {
         if !s.as_ref().is_ascii() {
             return Err(Error::NonAsciiInput {
-                row_num: idx,
+                input_type,
+                offending_idx: idx,
                 offending_string: s.as_ref().to_string(),
             });
         }
@@ -1441,7 +1480,7 @@ mod tests {
         ];
         for (mdist, expected) in cases {
             let result = cached_r
-                .get_neighbors_across_against_cached(&cached_q, mdist)
+                .get_neighbors_across_cached(&cached_q, mdist)
                 .expect("legal max dist");
             assert_eq!(result, expected);
         }
@@ -1558,12 +1597,12 @@ mod tests {
         let cached_reference = CachedRef::new(&reference, 2).expect("short input");
 
         let hits = cached_reference
-            .get_neighbors_across_against_cached(&cached_query, 1)
+            .get_neighbors_across_cached(&cached_query, 1)
             .expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
         let hits = cached_reference
-            .get_neighbors_across_against_cached(&cached_query, 2)
+            .get_neighbors_across_cached(&cached_query, 2)
             .expect("legal max distance");
         assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }

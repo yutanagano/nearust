@@ -152,10 +152,7 @@ impl CachedRef {
             Some(q_given) => {
                 if let Ok(cached) = q_given.cast::<CachedRef>() {
                     self.internal
-                        .get_neighbors_across_against_cached(
-                            &cached.borrow().internal,
-                            max_distance,
-                        )
+                        .get_neighbors_across_cached(&cached.borrow().internal, max_distance)
                         .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else if let Ok(iterable) = q_given.try_iter() {
                     let query_handles = get_pystring_handles(&iterable)?;

@@ -44,7 +44,7 @@ fn setup_benchmarks(c: &mut Criterion) {
 
     c.bench_function("get_candidates_cross (fully cached)", |b| {
         b.iter(|| {
-            let _ = cached_reference.get_neighbors_across_against_cached(&cached_query, 1);
+            let _ = cached_reference.get_neighbors_across_cached(&cached_query, 1);
         })
     });
 
