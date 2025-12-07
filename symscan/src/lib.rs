@@ -153,14 +153,33 @@ impl Span {
     }
 }
 
+/// Collection of string pairs that lie within the specified Levenshtein edit distance threshold.
+///
+/// This is what is returned via the [`Ok`] variant from [`get_neighbors_within`],
+/// [`get_neighbors_across`], and related methods in [`CachedRef`]. [`row`](NeighborPairs::row) and
+/// [`col`](NeighborPairs::col) contain the indices of the neighbor string pairs, and
+/// [`dists`](NeighborPairs::dists) contains the Levenshtein distances between the corresponding
+/// pairs.
 #[derive(Debug, PartialEq)]
-pub struct SparseDistMatrix {
+pub struct NeighborPairs {
+    /// Indices of strings in the input `query` slice that have neighbors.
     pub row: Vec<u32>,
+
+    /// Indices of neighbor strings. When computing neighbor pairs across separate `query` and
+    /// `reference` slices, then `query[row[i]]` and `reference[col[i]]` are neighbors. When
+    /// computing neighbor pairs within a single `query` slice, `query[row[i]]` and `query[col[i]]`
+    /// are neighbors.
     pub col: Vec<u32>,
+
+    /// Edit distances between neighbor string pairs. When computing neighbor pairs across separate
+    /// `query` and `reference` slices, then `Levenshtein(query[row[i]], reference[col[i]]) ==
+    /// dists[i]`. When computing neighbor pairs within a single `query` slice,
+    /// `Levenshtein(query[row[i]], query[col[i]]) == dists[i]`.
     pub dists: Vec<u8>,
 }
 
-impl SparseDistMatrix {
+impl NeighborPairs {
+    /// The number of neighboring string pairs detected.
     pub fn len(&self) -> usize {
         self.row.len()
     }
@@ -175,12 +194,12 @@ impl SparseDistMatrix {
 /// # Examples
 ///
 /// ```
-/// use symscan::{CachedRef, SparseDistMatrix};
+/// use symscan::{CachedRef, NeighborPairs};
 ///
 /// let reference = ["fooo", "barr", "bazz", "buzz"];
 /// let cached = CachedRef::new(&reference, 1).expect("valid reference");
 ///
-/// let SparseDistMatrix { row, col, dists } = cached
+/// let NeighborPairs { row, col, dists } = cached
 ///     .get_neighbors_across(&["fizz", "fuzz", "buzz"], 1)
 ///     .expect("valid query");
 ///
@@ -206,6 +225,7 @@ impl CachedRef {
             });
         }
         let max_distance = MaxDistance::try_from(max_distance)?;
+        check_strings_ascii(reference)?;
 
         let (str_store, str_spans) = {
             let strlens = reference.iter().map(|s| s.as_ref().len()).collect_vec();
@@ -310,7 +330,7 @@ impl CachedRef {
         })
     }
 
-    pub fn get_neighbors_within(&self, max_distance: u8) -> Result<SparseDistMatrix, Error> {
+    pub fn get_neighbors_within(&self, max_distance: u8) -> Result<NeighborPairs, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
             return Err(Error::MaxDistTooLargeForCache {
@@ -337,7 +357,7 @@ impl CachedRef {
         &self,
         query: &[impl AsRef<str> + Sync],
         max_distance: u8,
-    ) -> Result<SparseDistMatrix, Error> {
+    ) -> Result<NeighborPairs, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
             return Err(Error::MaxDistTooLargeForCache {
@@ -352,6 +372,7 @@ impl CachedRef {
                 limit: u32::MAX as usize,
             });
         }
+        check_strings_ascii(query)?;
 
         let (q_idx_store, convergence_groups) = {
             let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
@@ -439,7 +460,7 @@ impl CachedRef {
         &self,
         query: &Self,
         max_distance: u8,
-    ) -> Result<SparseDistMatrix, Error> {
+    ) -> Result<NeighborPairs, Error> {
         let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
             return Err(Error::MaxDistTooLargeForCache {
@@ -580,10 +601,54 @@ impl CachedRef {
     }
 }
 
+/// Detect string pairs within an input collection that lie within a threshold edit distance.
+///
+/// The function considers all possible combinations (not permutations, see
+/// [below](#a-note-on-double-counting-pairs)) of string pairs from `query`, and returns all those
+/// where the two strings are no more than `max_distance` Levenshtein edit distance units apart.
+///
+/// # A note on double-counting pairs
+///
+/// The [`NeighborPairs`] struct returned via the [`Ok`] variant _**DOES NOT**_ double-count string
+/// pairs. As seen in the examples below, each pair is represented once where the `row` index is
+/// always less than the `col` index. In other words, if you were to interpret the
+/// [`NeighborPairs`] as a sparse matrix, only the lower triangle will be filled.
+///
+/// # Errors
+///
+/// Currently, the crate only supports ASCII input. This function will return
+/// [`Error::NonAsciiInput`] if `query` contains any references to non-ASCII data.
+///
+/// There are two more ways the function can [`Err`], due to some hard limits on the magnitudes of
+/// the input arguments. However, note that in practice, runtime or memory usage are much more
+/// likely to be the limiting factor. Firstly, the function will return [`Error::TooManyStrings`]
+/// if `query` contains more than [4,294,967,295](u32::MAX) elements. This is because
+/// [`NeighborPairs`] uses [`u32`]s to encode string indices. Secondly, the function will return
+/// [`Error::MaxDistCapped`] if `max_distance` is set to [255](u8::MAX), as that value is reserved
+/// for encoding when pairs exceed the threshold distance during intermediate computations.
+///
+/// # Examples
+///
+/// ```
+/// use symscan::{get_neighbors_within, NeighborPairs};
+///
+/// let query = ["fizz", "fuzz", "buzz"];
+/// let NeighborPairs { row, col, dists } = get_neighbors_within(&query, 1).unwrap();
+///
+/// assert_eq!(row,   vec![0, 1]);
+/// assert_eq!(col,   vec![1, 2]);
+/// assert_eq!(dists, vec![1, 1]);
+///
+/// let NeighborPairs { row, col, dists } = get_neighbors_within(&query, 2).unwrap();
+///
+/// assert_eq!(row,   vec![0, 0, 1]);
+/// assert_eq!(col,   vec![1, 2, 2]);
+/// assert_eq!(dists, vec![1, 2, 1]);
+/// ```
 pub fn get_neighbors_within(
     query: &[impl AsRef<str> + Sync],
     max_distance: u8,
-) -> Result<SparseDistMatrix, Error> {
+) -> Result<NeighborPairs, Error> {
     if query.len() > u32::MAX as usize {
         return Err(Error::TooManyStrings {
             input_type: InputType::Query,
@@ -592,6 +657,7 @@ pub fn get_neighbors_within(
         });
     }
     let max_distance = MaxDistance::try_from(max_distance)?;
+    check_strings_ascii(query)?;
 
     let (convergent_indices, group_sizes) = {
         let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
@@ -659,11 +725,51 @@ pub fn get_neighbors_within(
     Ok(collect_true_hits(&candidates, &dists, max_distance))
 }
 
+/// Detect string pairs across two input collections that lie within a threshold edit distance.
+///
+/// The function considers all string pairs in the cartesian product of `query` and `reference`,
+/// and returns all those where the two strings are no more than `max_distance` Levenshtein edit
+/// distance units apart.
+///
+/// # Errors
+///
+/// Currently, the crate only supports ASCII input. This function will return
+/// [`Error::NonAsciiInput`] if `query` contains any references to non-ASCII data.
+///
+/// There are two more ways the function can [`Err`], due to some hard limits on the magnitudes of
+/// the input arguments. However, note that in practice, runtime or memory usage are much more
+/// likely to be the limiting factor. Firstly, the function will return [`Error::TooManyStrings`]
+/// if `query` contains more than 2,147,483,647 ((2^31)-1) elements. This is because internal
+/// computations use modified [`u32`]s to encode string indices, where one bit is reserved for
+/// distinguishing between the `query` slice and the `reference` slice. Secondly, the function will
+/// return [`Error::MaxDistCapped`] if `max_distance` is set to [255](u8::MAX), as that value is
+/// reserved for encoding when pairs exceed the threshold distance during intermediate
+/// computations.
+///
+/// # Examples
+///
+/// ```
+/// use symscan::{get_neighbors_across, NeighborPairs};
+///
+/// let query = ["fizz", "fuzz", "buzz"];
+/// let reference = ["fooo", "barr", "bazz", "buzz"];
+/// let NeighborPairs { row, col, dists } = get_neighbors_across(&query, &reference, 1).unwrap();
+///
+/// assert_eq!(row,   vec![1, 2, 2]);
+/// assert_eq!(col,   vec![3, 2, 3]);
+/// assert_eq!(dists, vec![1, 1, 0]);
+///
+/// let NeighborPairs { row, col, dists } = get_neighbors_across(&query, &reference, 2).unwrap();
+///
+/// assert_eq!(row,   vec![0, 0, 1, 1, 2, 2]);
+/// assert_eq!(col,   vec![2, 3, 2, 3, 2, 3]);
+/// assert_eq!(dists, vec![2, 2, 2, 1, 1, 0]);
+/// ```
 pub fn get_neighbors_across(
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
     max_distance: u8,
-) -> Result<SparseDistMatrix, Error> {
+) -> Result<NeighborPairs, Error> {
     if query.len() > CrossIndex::MAX as usize {
         return Err(Error::TooManyStrings {
             input_type: InputType::Query,
@@ -679,6 +785,8 @@ pub fn get_neighbors_across(
         });
     }
     let max_distance = MaxDistance::try_from(max_distance)?;
+    check_strings_ascii(query)?;
+    check_strings_ascii(reference)?;
 
     let (convergent_indices, group_sizes) = {
         let num_del_variants_q = get_num_del_vars_per_string(query, max_distance);
@@ -804,6 +912,18 @@ pub fn get_neighbors_across(
     let dists = compute_dists(&candidates, &query, &reference, max_distance);
 
     Ok(collect_true_hits(&candidates, &dists, max_distance))
+}
+
+fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), Error> {
+    for (idx, s) in strings.iter().enumerate() {
+        if !s.as_ref().is_ascii() {
+            return Err(Error::NonAsciiInput {
+                row_num: idx,
+                offending_string: s.as_ref().to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn get_num_del_vars_per_string(
@@ -1067,7 +1187,7 @@ fn collect_true_hits(
     hit_candidates: &[(u32, u32)],
     dists: &[u8],
     max_distance: MaxDistance,
-) -> SparseDistMatrix {
+) -> NeighborPairs {
     let mut qi_filtered = Vec::with_capacity(dists.len());
     let mut ri_filtered = Vec::with_capacity(dists.len());
     let mut dists_filtered = Vec::with_capacity(dists.len());
@@ -1085,7 +1205,7 @@ fn collect_true_hits(
     ri_filtered.shrink_to_fit();
     dists_filtered.shrink_to_fit();
 
-    SparseDistMatrix {
+    NeighborPairs {
         row: qi_filtered,
         col: ri_filtered,
         dists: dists_filtered,
@@ -1165,7 +1285,7 @@ mod tests {
                 (0..5).tuple_combinations().collect_vec(),
                 vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
                 MaxDistance::try_from(1).expect("legal"),
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -1175,7 +1295,7 @@ mod tests {
                 (0..5).tuple_combinations().collect_vec(),
                 vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
                 MaxDistance::try_from(2).expect("legal"),
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],
@@ -1194,7 +1314,7 @@ mod tests {
         let cases = [
             (
                 1,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -1202,7 +1322,7 @@ mod tests {
             ),
             (
                 2,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],
@@ -1221,7 +1341,7 @@ mod tests {
         let cases = [
             (
                 1,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 1],
                     col: vec![1, 2],
                     dists: vec![1, 1],
@@ -1229,7 +1349,7 @@ mod tests {
             ),
             (
                 2,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 0, 0, 1],
                     col: vec![1, 2, 3, 2],
                     dists: vec![1, 2, 2, 1],
@@ -1247,7 +1367,7 @@ mod tests {
         let cases = [
             (
                 1,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 1],
                     col: vec![2, 2],
                     dists: vec![0, 1],
@@ -1255,7 +1375,7 @@ mod tests {
             ),
             (
                 2,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 0, 1, 2, 3, 4],
                     col: vec![0, 2, 2, 2, 2, 1],
                     dists: vec![2, 0, 1, 2, 2, 2],
@@ -1274,7 +1394,7 @@ mod tests {
         let cases = [
             (
                 1,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 1],
                     col: vec![2, 2],
                     dists: vec![0, 1],
@@ -1282,7 +1402,7 @@ mod tests {
             ),
             (
                 2,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 0, 1, 2, 3, 4],
                     col: vec![0, 2, 2, 2, 2, 1],
                     dists: vec![2, 0, 1, 2, 2, 2],
@@ -1304,7 +1424,7 @@ mod tests {
         let cases = [
             (
                 1,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 1],
                     col: vec![2, 2],
                     dists: vec![0, 1],
@@ -1312,7 +1432,7 @@ mod tests {
             ),
             (
                 2,
-                SparseDistMatrix {
+                NeighborPairs {
                     row: vec![0, 0, 1, 2, 3, 4],
                     col: vec![0, 2, 2, 2, 2, 1],
                     dists: vec![2, 0, 1, 2, 2, 2],
@@ -1344,7 +1464,7 @@ mod tests {
             .expect("test files have valid lines")
     }
 
-    fn bytes_as_neighbour_pairs(bytes: &[u8]) -> SparseDistMatrix {
+    fn bytes_as_neighbour_pairs(bytes: &[u8]) -> NeighborPairs {
         let mut i = Vec::new();
         let mut j = Vec::new();
         let mut dists = Vec::new();
@@ -1371,7 +1491,7 @@ mod tests {
             );
         });
 
-        SparseDistMatrix {
+        NeighborPairs {
             row: i,
             col: j,
             dists,

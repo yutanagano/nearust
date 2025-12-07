@@ -4,9 +4,7 @@ use pyo3::{
     prelude::*,
     types::{PyString, PyTuple},
 };
-use symscan::{
-    get_neighbors_across, get_neighbors_within, CachedRef as CRInternal, Error, SparseDistMatrix,
-};
+use symscan::{get_neighbors_across, get_neighbors_within, CachedRef as CRInternal, NeighborPairs};
 
 /// A memoized implementation of symdel.
 ///
@@ -35,7 +33,6 @@ impl CachedRef {
     fn new(reference: &Bound<PyAny>, max_distance: u8) -> PyResult<Self> {
         let ref_handles = get_pystring_handles(&reference)?;
         let ref_views = get_str_refs(&ref_handles)?;
-        check_strings_ascii(&ref_views)?;
 
         let internal = CRInternal::new(&ref_views, max_distance)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -151,7 +148,7 @@ impl CachedRef {
         query: Option<&Bound<'py, PyAny>>,
         max_distance: u8,
     ) -> PyResult<Bound<'py, PyTuple>> {
-        let SparseDistMatrix { row, col, dists } = match query {
+        let NeighborPairs { row, col, dists } = match query {
             Some(q_given) => {
                 if let Ok(cached) = q_given.cast::<CachedRef>() {
                     self.internal
@@ -265,13 +262,11 @@ fn get_neighbors<'py>(
 ) -> PyResult<Bound<'py, PyTuple>> {
     let query_handles = get_pystring_handles(&query)?;
     let query_views = get_str_refs(&query_handles)?;
-    check_strings_ascii(&query_views)?;
 
-    let SparseDistMatrix { row, col, dists } = match reference {
+    let NeighborPairs { row, col, dists } = match reference {
         Some(ref_given) => {
             let ref_handles = get_pystring_handles(&ref_given)?;
             let ref_views = get_str_refs(&ref_handles)?;
-            check_strings_ascii(&ref_views)?;
             get_neighbors_across(&query_views, &ref_views, max_distance)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?
         }
@@ -305,19 +300,6 @@ fn get_str_refs<'py>(input: &'py [Bound<'py, PyString>]) -> PyResult<Vec<&'py st
         .iter()
         .map(|v| v.to_str())
         .collect::<PyResult<Vec<_>>>()
-}
-
-fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), PyErr> {
-    for (idx, s) in strings.iter().enumerate() {
-        if !s.as_ref().is_ascii() {
-            let e = Error::NonAsciiInput {
-                row_num: idx,
-                offending_string: s.as_ref().to_string(),
-            };
-            return Err(PyValueError::new_err(e.to_string()));
-        }
-    }
-    Ok(())
 }
 
 /// Fast detection of similar strings
