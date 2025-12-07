@@ -1,3 +1,22 @@
+//! SymScan enables extremely fast discovery of pairs of similar strings within and across large
+//! collections.
+//!
+//! SymScan is a variation on the [SymSpell](https://github.com/wolfgarbe/SymSpell) algorithm that
+//! is optimised for bulk-searching similar strings within one or across two large string
+//! collections at once (e.g. searching for similar protein sequences among a collection of 10M).
+//! The key algorithmic difference between SymScan and traditional SymSpell is the use of a
+//! [sort-merge join](https://en.wikipedia.org/wiki/Sort-merge_join) approach in place of hashmaps
+//! to discover input strings that share common deletion variants. This sort-and-scan approach
+//! trades off an additional factor of O(log N) in expected time complexity for improved cache
+//! locality and effective parallelization, and ends up being much faster for the above use case.
+//! See [`get_neighbors_within`] and [`get_neighbors_across`] for details on the API.
+//!
+//! Even for our intended use case of discovering pairs of similar strings from large collections,
+//! it is sometimes useful to memoize the deletion variant computations for at least one side of
+//! the query (e.g. reference-side memoization when making repeated queries against a very large
+//! reference collection with relatively smaller query collections). For such cases, the library
+//! also provides the [`CachedRef`] struct.
+
 use foldhash::fast::FixedState;
 use hashbrown::HashMap;
 use itertools::Itertools;
