@@ -9,10 +9,10 @@ import os
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "nearust"
+project = "symscan"
 copyright = "2025, Yuta Nagano"
 author = "Yuta Nagano, Matthew Cowley"
-release = metadata.version("nearust")
+release = metadata.version("symscan")
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -34,4 +34,4 @@ autodoc_typehints = "none"
 html_theme = "shibuya"
 html_static_path = ["_static"]
 html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
-html_theme_options = {"github_url": "https://github.com/yutanagano/nearust"}
+html_theme_options = {"github_url": "https://github.com/yutanagano/symscan"}

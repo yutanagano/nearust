@@ -3,14 +3,14 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "nearust"
+name = "symscan"
 requires-python = ">=3.10"
 authors = [
   { name = "Yuta Nagano", email = "yutanagano51@proton.me" },
   { name = "Matthew Cowley", email = "matthew.v.cowley@gmail.com" },
 ]
 maintainers = [{ name = "Yuta Nagano", email = "yutanagano51@proton.me" }]
-description = "Fast detection of similar strings"
+description = "Fast detection of similar strings in bulk"
 readme = "pypi_README.md"
 keywords = [
   "edit-distance",
@@ -18,6 +18,7 @@ keywords = [
   "string-matching",
   "string-search",
   "string-similarity",
+  "symspell",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -37,13 +38,13 @@ dependencies = ["numpy~=2.3"]
 dev = ["sphinx", "esbonio", "shibuya", "numpydoc", "pandas"]
 
 [project.urls]
-Homepage = "https://github.com/yutanagano/nearust"
-Documentation = "https://nearust.readthedocs.io"
-Repository = "https://github.com/yutanagano/nearust"
-Issues = "https://github.com/yutanagano/nearust/issues"
+Homepage = "https://github.com/yutanagano/symscan"
+# Documentation = "https://symscan.readthedocs.io"
+Repository = "https://github.com/yutanagano/symscan"
+Issues = "https://github.com/yutanagano/symscan/issues"
 
 [tool.maturin]
-module-name = "nearust"
+manifest-path = "symscan-py/Cargo.toml"
 profile = "release"
 
 [tool.cibuildwheel]

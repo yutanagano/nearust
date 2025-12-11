@@ -2,9 +2,9 @@ Usage (Python package)
 ======================
 
 The Python package exposes two ways to use the symdel algorithm. The first is
-the :py:func:`~nearust.symdel` function, which is optimised for one-off
+the :py:func:`~symscan.symdel` function, which is optimised for one-off
 computations. In addition, the package provides a memoized implementation
-in the :py:class:`~nearust.CachedSymdel` class, which is useful for cases where
+in the :py:class:`~symscan.CachedSymdel` class, which is useful for cases where
 you know you will be repeatedly querying against a large reference set.
 
 Like with the :doc:`CLI </usage_cli>`, the default setting is to detect string
@@ -17,11 +17,11 @@ for more detail.
 Functional API
 --------------
 
-.. autofunction:: nearust.symdel
+.. autofunction:: symscan.symdel
 
 
 Class-based (memoized) API
 --------------------------
 
-.. autoclass:: nearust.CachedSymdel
+.. autoclass:: symscan.CachedSymdel
    :members:

@@ -43,7 +43,7 @@ jobs:
     needs: [build_wheels, make_sdist]
     environment:
       name: pypi
-      url: https://pypi.org/p/nearust
+      url: https://pypi.org/p/symscan
     permissions:
       id-token: write
     runs-on: ubuntu-latest

@@ -1,20 +1,99 @@
+//! SymScan enables extremely fast discovery of pairs of similar strings within and across large
+//! collections.
+//!
+//! SymScan is a variation on the [symmetric deletion
+//! ](https://seekstorm.com/blog/1000x-spelling-correction/) algorithm that is optimised for
+//! bulk-searching similar strings within one or across two large string collections at once (e.g.
+//! searching for similar protein sequences among a collection of 10M). The key algorithmic
+//! difference between SymScan and traditional symmetric deletion is the use of a [sort-merge
+//! join](https://en.wikipedia.org/wiki/Sort-merge_join) approach in place of hashmaps to discover
+//! input strings that share common deletion variants. This sort-and-scan approach trades off an
+//! additional factor of O(log N) (with N the total number of strings being compared) in expected
+//! time complexity for improved cache locality and effective parallelization, and ends up being
+//! much faster for the above use case. See [`get_neighbors_within`] and [`get_neighbors_across`]
+//! for details on the API.
+//!
+//! Even for our intended use case of discovering pairs of similar strings from large collections,
+//! it is sometimes useful to memoize the deletion variant computations for at least one side of
+//! the query (e.g. reference-side memoization when making repeated queries against a very large
+//! reference collection with relatively smaller query collections). For such cases, the library
+//! also provides the [`CachedRef`] struct.
+
 use foldhash::fast::FixedState;
 use hashbrown::HashMap;
 use itertools::Itertools;
 use rapidfuzz::distance::levenshtein;
 use rayon::prelude::*;
+use std::fmt::Display;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{self, BufRead, Error, ErrorKind::InvalidData, Write};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::{ptr, str, u8, usize};
-use utils::CrossIndex;
-pub use utils::MaxDistance;
+use thiserror;
+use utils::{CrossIndex, MaxDistance};
 
-mod pymod;
+/// Used to specify the source of certain [`Error`] variants.
+#[derive(Debug)]
+pub enum InputType {
+    Query,
+    Reference,
+}
+
+impl Display for InputType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            InputType::Query => "query",
+            InputType::Reference => "reference",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+/// Symscan error variants.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// An input collection contained references to at least one non-ASCII string.
+    #[error("non-ASCII input currently unsupported ('{offending_string}' at {offending_idx})")]
+    NonAsciiInput {
+        input_type: InputType,
+        offending_idx: usize,
+        offending_string: String,
+    },
+
+    /// An input collection contained more than the maximum allowed number of strings.
+    ///
+    /// In most cases, the maximum allowed length is [4,294,967,295](u32::MAX). This is because
+    /// internal computations use [`u32`]s to encode string indices. The exception is when calling
+    /// [`get_neighbors_across`], where the maximum is instead 2,147,483,647 ((2^31)-1) due to the
+    /// fact that one of the 32 bits is reserved for distinguishing between indexes of the `query`
+    /// slice and the `reference` slice.
+    #[error("{input_type} must not hold more than {limit} elements, got {got}")]
+    TooManyStrings {
+        input_type: InputType,
+        got: usize,
+        limit: usize,
+    },
+
+    /// The `max_distance` function / method parameter was set to [255](u8::MAX).
+    ///
+    /// This results in an error because that value is reserved for encoding when pairs exceed the
+    /// threshold distance during internal computations.
+    #[error("max_distance is capped at {limit}, got {illegal}", limit = u8::MAX - 1, illegal = u8::MAX)]
+    MaxDistCapped,
+
+    /// The `max_distance` method parameter was set to a value greater than that given when
+    /// constructing [`CachedRef`] being queried.
+    ///
+    /// This results in an error because the `max_distance` given at [`CachedRef`] construction
+    /// time determines how many `reference` string deletion variants are generated and cached in
+    /// the struct. A cache containing deletion variants to a depth of X cannot support symscan
+    /// queries with `max_distance` > X.
+    #[error("CachedRef instance not compatible with max_distance above {limit}, got {got}")]
+    MaxDistTooLargeForCache { got: u8, limit: u8 },
+}
 
 mod utils {
-    use std::io::{Error, ErrorKind::InvalidData};
+    use super::Error;
 
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
     pub struct MaxDistance(u8);
@@ -34,10 +113,7 @@ mod utils {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             if value == u8::MAX {
-                Err(Error::new(
-                    InvalidData,
-                    format!("max_distance must be less than {} (got {})", u8::MAX, value),
-                ))
+                Err(Error::MaxDistCapped)
             } else {
                 Ok(Self(value))
             }
@@ -120,11 +196,88 @@ impl Span {
     }
 }
 
-/// Class for assymetric cross-set symdel where the reference is known beforehand, and a variant
-/// hashmap (mapping deletion variants to all the original strings that could have produced that
-/// variant) can be computed beforehand to expedite multiple future queries against that same
-/// reference.
-pub struct CachedSymdel {
+/// Collection of string pairs that lie within the specified Levenshtein edit distance threshold.
+///
+/// This is what is returned via the [`Ok`] variant from [`get_neighbors_within`],
+/// [`get_neighbors_across`], and related methods in [`CachedRef`]. [`row`](NeighborPairs::row) and
+/// [`col`](NeighborPairs::col) contain the indices of the neighbor string pairs, and
+/// [`dists`](NeighborPairs::dists) contains the Levenshtein distances between the corresponding
+/// pairs.
+///
+/// # A note on double-counting pairs
+///
+/// When returning the results of [`get_neighbors_within`] / [`CachedRef::get_neighbors_within`],
+/// string pairs _**ARE NOT**_ double-counted. As seen in the
+/// [examples](get_neighbors_within#examples), each pair is represented once where the
+/// [`row`](NeighborPairs::row) index is always less than the [`col`](NeighborPairs::col) index. In
+/// other words, if you were to interpret the [`NeighborPairs`] in these situations as a sparse
+/// matrix, only the lower triangle will be filled.
+#[derive(Debug, PartialEq)]
+pub struct NeighborPairs {
+    /// Indices of strings in the input `query` slice that have neighbors.
+    pub row: Vec<u32>,
+
+    /// Indices of neighbor strings. When computing neighbor pairs across separate `query` and
+    /// `reference` slices, then `query[row[i]]` and `reference[col[i]]` are neighbors. When
+    /// computing neighbor pairs within a single `query` slice, `query[row[i]]` and `query[col[i]]`
+    /// are neighbors.
+    pub col: Vec<u32>,
+
+    /// Edit distances between neighbor string pairs. When computing neighbor pairs across separate
+    /// `query` and `reference` slices, then `Levenshtein(query[row[i]], reference[col[i]]) ==
+    /// dists[i]`. When computing neighbor pairs within a single `query` slice,
+    /// `Levenshtein(query[row[i]], query[col[i]]) == dists[i]`.
+    pub dists: Vec<u8>,
+}
+
+impl NeighborPairs {
+    /// The number of neighboring string pairs detected.
+    pub fn len(&self) -> usize {
+        self.row.len()
+    }
+}
+
+/// A struct for memoizing the deletion variant calculations for a string collection.
+///
+/// When [constructed](CachedRef::new), [`CachedRef`] precomputes and stores the deletion variants
+/// for the supplied `reference` strings as a hashmap. This significantly speeds up subsequent
+/// queries against the reference, at the cost of spending extra time to construct the hashmap.
+/// This is useful for use-cases where you want to repeatedly query the same reference, especially
+/// if the reference is very large. However, for one-off computations, the pure functions
+/// [`get_neighbors_within`] and [`get_neighbors_across`] are faster.
+///
+/// **Note** that [`CachedRef`] instances constructed with `max_distance` set to X can only support
+/// queries with `max_distance` less than or equal to X.
+///
+/// **Note** when interpreting the index order of returned [`NeighborPairs`], the string collection
+/// specified at construction is considered the _reference_, and any string collections specified
+/// during subsequent query calls are considered the _query_.
+///
+/// # Examples
+///
+/// ```
+/// use symscan::{CachedRef, NeighborPairs};
+///
+/// let reference = ["fooo", "barr", "bazz", "buzz"];
+/// let cached = CachedRef::new(&reference, 2).unwrap();
+///
+/// let NeighborPairs { row, col, dists } = cached
+///     .get_neighbors_across(&["fizz", "fuzz", "buzz"], 1)
+///     .unwrap();
+///
+/// assert_eq!(row,   vec![1, 2, 2]);
+/// assert_eq!(col,   vec![3, 2, 3]);
+/// assert_eq!(dists, vec![1, 1, 0]);
+///
+/// let NeighborPairs { row, col, dists } = cached
+///     .get_neighbors_across(&["fizz", "fuzz", "buzz"], 2)
+///     .unwrap();
+///
+/// assert_eq!(row,   vec![0, 0, 1, 1, 2, 2]);
+/// assert_eq!(col,   vec![2, 3, 2, 3, 2, 3]);
+/// assert_eq!(dists, vec![2, 2, 2, 1, 1, 0]);
+/// ```
+pub struct CachedRef {
     str_store: Vec<u8>,
     str_spans: Vec<Span>,
     index_store: Vec<u32>,
@@ -132,21 +285,18 @@ pub struct CachedSymdel {
     max_distance: MaxDistance,
 }
 
-impl CachedSymdel {
-    pub fn new(
-        reference: &[impl AsRef<str> + Sync],
-        max_distance: MaxDistance,
-    ) -> io::Result<Self> {
+impl CachedRef {
+    /// Construct a new [`CachedRef`] instance.
+    pub fn new(reference: &[impl AsRef<str> + Sync], max_distance: u8) -> Result<Self, Error> {
         if reference.len() > u32::MAX as usize {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "reference must not hold more than {} elements, got {}",
-                    u32::MAX,
-                    reference.len(),
-                ),
-            ));
+            return Err(Error::TooManyStrings {
+                input_type: InputType::Reference,
+                got: reference.len(),
+                limit: u32::MAX as usize,
+            });
         }
+        let max_distance = MaxDistance::try_from(max_distance)?;
+        check_strings_ascii(reference, InputType::Reference)?;
 
         let (str_store, str_spans) = {
             let strlens = reference.iter().map(|s| s.as_ref().len()).collect_vec();
@@ -242,7 +392,7 @@ impl CachedSymdel {
             variant_map.entry(v_hash).insert(index_range);
         }
 
-        Ok(CachedSymdel {
+        Ok(CachedRef {
             str_store,
             str_spans,
             index_store,
@@ -251,12 +401,14 @@ impl CachedSymdel {
         })
     }
 
-    pub fn get_candidates_within(
-        &self,
-        max_distance: MaxDistance,
-    ) -> io::Result<(Vec<(u32, u32)>, Vec<u8>)> {
+    /// The memoized equivalent of [`get_neighbors_within`].
+    pub fn get_neighbors_within(&self, max_distance: u8) -> Result<NeighborPairs, Error> {
+        let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: self.max_distance.as_u8(),
+            });
         }
 
         let mut convergent_indices = Vec::with_capacity(self.variant_map.len());
@@ -267,30 +419,33 @@ impl CachedSymdel {
             convergent_indices.push(self.get_convergent_indices_from_span(span));
         });
 
-        let candidates = get_hit_candidates_from_cis_within(&convergent_indices);
+        let candidates = get_hit_candidates_within(&convergent_indices);
         let dists = self.compute_dists_fully_cached(&candidates, self, max_distance);
 
-        Ok((candidates, dists))
+        Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
-    pub fn get_candidates_cross(
+    /// The memoized equivalent of [`get_neighbors_across`].
+    pub fn get_neighbors_across(
         &self,
         query: &[impl AsRef<str> + Sync],
-        max_distance: MaxDistance,
-    ) -> io::Result<(Vec<(u32, u32)>, Vec<u8>)> {
+        max_distance: u8,
+    ) -> Result<NeighborPairs, Error> {
+        let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: self.max_distance.as_u8(),
+            });
         }
         if query.len() > u32::MAX as usize {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "query must not hold more than {} elements, got {}",
-                    u32::MAX,
-                    query.len(),
-                ),
-            ));
+            return Err(Error::TooManyStrings {
+                input_type: InputType::Query,
+                got: query.len(),
+                limit: u32::MAX as usize,
+            });
         }
+        check_strings_ascii(query, InputType::Query)?;
 
         let (q_idx_store, convergence_groups) = {
             let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
@@ -371,29 +526,28 @@ impl CachedSymdel {
         let candidates = get_hit_candidates_from_cis_cross(&convergence_groups);
         let dists = self.compute_dists_partially_cached(&candidates, query, max_distance);
 
-        Ok((candidates, dists))
+        Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
-    pub fn get_candidates_cross_against_cached(
+    /// Equivalent to [`CachedRef::get_neighbors_across`], where the query is also a [`CachedRef`]
+    /// instance.
+    pub fn get_neighbors_across_cached(
         &self,
         query: &Self,
-        max_distance: MaxDistance,
-    ) -> io::Result<(Vec<(u32, u32)>, Vec<u8>)> {
+        max_distance: u8,
+    ) -> Result<NeighborPairs, Error> {
+        let max_distance = MaxDistance::try_from(max_distance)?;
         if max_distance > self.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the caller ({})", max_distance.as_u8(), self.max_distance.as_u8())));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: self.max_distance.as_u8(),
+            });
         }
         if max_distance > query.max_distance {
-            return Err(Error::new(InvalidData, format!("the max_distance supplied to this method ({}) must not be greater than the max_distance specified when constructing the query ({})", max_distance.as_u8(), query.max_distance.as_u8())));
-        }
-        if query.str_spans.len() > u32::MAX as usize {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "query must not hold more than {} elements, got {}",
-                    u32::MAX,
-                    query.str_spans.len(),
-                ),
-            ));
+            return Err(Error::MaxDistTooLargeForCache {
+                got: max_distance.as_u8(),
+                limit: query.max_distance.as_u8(),
+            });
         }
 
         let convergence_groups = if query.variant_map.len() < self.variant_map.len() {
@@ -456,7 +610,7 @@ impl CachedSymdel {
         let candidates = get_hit_candidates_from_cis_cross(&convergence_groups);
         let dists = self.compute_dists_fully_cached(&candidates, query, max_distance);
 
-        Ok((candidates, dists))
+        Ok(collect_true_hits(&candidates, &dists, max_distance))
     }
 
     #[inline(always)]
@@ -522,20 +676,53 @@ impl CachedSymdel {
     }
 }
 
-pub fn get_candidates_within(
+/// Detect string pairs within an input collection that lie within a threshold edit distance.
+///
+/// The function considers all possible combinations (not permutations, [read
+/// more](NeighborPairs#a-note-on-double-counting-pairs)) of string pairs from `query`, and returns
+/// all those where the two strings are no more than `max_distance` Levenshtein edit distance units
+/// apart.
+///
+/// # Errors
+///
+/// Currently, the crate only supports ASCII input. The function will [`Err`] with
+/// [`Error::NonAsciiInput`] if `query` contains any non-ASCII data.
+///
+/// There are some hard limits on the sizes of the input arguments (see [`Error::TooManyStrings`],
+/// [`Error::MaxDistCapped`]). Note however that in practice, runtime or memory usage is almost
+/// certainly the limiting factor instead.
+///
+/// # Examples
+///
+/// ```
+/// use symscan::{get_neighbors_within, NeighborPairs};
+///
+/// let query = ["fizz", "fuzz", "buzz"];
+/// let NeighborPairs { row, col, dists } = get_neighbors_within(&query, 1).unwrap();
+///
+/// assert_eq!(row,   vec![0, 1]);
+/// assert_eq!(col,   vec![1, 2]);
+/// assert_eq!(dists, vec![1, 1]);
+///
+/// let NeighborPairs { row, col, dists } = get_neighbors_within(&query, 2).unwrap();
+///
+/// assert_eq!(row,   vec![0, 0, 1]);
+/// assert_eq!(col,   vec![1, 2, 2]);
+/// assert_eq!(dists, vec![1, 2, 1]);
+/// ```
+pub fn get_neighbors_within(
     query: &[impl AsRef<str> + Sync],
-    max_distance: MaxDistance,
-) -> io::Result<Vec<(u32, u32)>> {
+    max_distance: u8,
+) -> Result<NeighborPairs, Error> {
     if query.len() > u32::MAX as usize {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "query must not hold more than {} elements, got {}",
-                u32::MAX,
-                query.len(),
-            ),
-        ));
+        return Err(Error::TooManyStrings {
+            input_type: InputType::Query,
+            got: query.len(),
+            limit: u32::MAX as usize,
+        });
     }
+    let max_distance = MaxDistance::try_from(max_distance)?;
+    check_strings_ascii(query, InputType::Query)?;
 
     let (convergent_indices, group_sizes) = {
         let num_vars_per_string = get_num_del_vars_per_string(query, max_distance);
@@ -597,34 +784,68 @@ pub fn get_candidates_within(
 
     debug_assert_eq!(remaining.len(), 0);
 
-    Ok(get_hit_candidates_from_cis_within(&convergent_chunks))
+    let candidates = get_hit_candidates_within(&convergent_chunks);
+    let dists = compute_dists(&candidates, &query, &query, max_distance);
+
+    Ok(collect_true_hits(&candidates, &dists, max_distance))
 }
 
-pub fn get_candidates_cross(
+/// Detect string pairs across two input collections that lie within a threshold edit distance.
+///
+/// The function considers all string pairs in the cartesian product of `query` and `reference`,
+/// and returns all those where the two strings are no more than `max_distance` Levenshtein edit
+/// distance units apart.
+///
+/// # Errors
+///
+/// Currently, the crate only supports ASCII input. The function will [`Err`] with
+/// [`Error::NonAsciiInput`] if `query` or `reference` contain any non-ASCII data.
+///
+/// There are some hard limits on the sizes of the input arguments (see [`Error::TooManyStrings`],
+/// [`Error::MaxDistCapped`]). Note however that in practice, runtime or memory usage is almost
+/// certainly the limiting factor instead.
+///
+/// # Examples
+///
+/// ```
+/// use symscan::{get_neighbors_across, NeighborPairs};
+///
+/// let query = ["fizz", "fuzz", "buzz"];
+/// let reference = ["fooo", "barr", "bazz", "buzz"];
+/// let NeighborPairs { row, col, dists } = get_neighbors_across(&query, &reference, 1).unwrap();
+///
+/// assert_eq!(row,   vec![1, 2, 2]);
+/// assert_eq!(col,   vec![3, 2, 3]);
+/// assert_eq!(dists, vec![1, 1, 0]);
+///
+/// let NeighborPairs { row, col, dists } = get_neighbors_across(&query, &reference, 2).unwrap();
+///
+/// assert_eq!(row,   vec![0, 0, 1, 1, 2, 2]);
+/// assert_eq!(col,   vec![2, 3, 2, 3, 2, 3]);
+/// assert_eq!(dists, vec![2, 2, 2, 1, 1, 0]);
+/// ```
+pub fn get_neighbors_across(
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
-    max_distance: MaxDistance,
-) -> io::Result<Vec<(u32, u32)>> {
-    if query.len() > CrossIndex::MAX {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "query must not hold more than {} elements, got {}",
-                u32::MAX,
-                query.len(),
-            ),
-        ));
+    max_distance: u8,
+) -> Result<NeighborPairs, Error> {
+    if query.len() > CrossIndex::MAX as usize {
+        return Err(Error::TooManyStrings {
+            input_type: InputType::Query,
+            got: query.len(),
+            limit: CrossIndex::MAX as usize,
+        });
     }
-    if reference.len() > CrossIndex::MAX {
-        return Err(Error::new(
-            InvalidData,
-            format!(
-                "reference must not hold more than {} elements, got {}",
-                u32::MAX,
-                reference.len(),
-            ),
-        ));
+    if reference.len() > CrossIndex::MAX as usize {
+        return Err(Error::TooManyStrings {
+            input_type: InputType::Reference,
+            got: reference.len(),
+            limit: CrossIndex::MAX as usize,
+        });
     }
+    let max_distance = MaxDistance::try_from(max_distance)?;
+    check_strings_ascii(query, InputType::Query)?;
+    check_strings_ascii(reference, InputType::Reference)?;
 
     let (convergent_indices, group_sizes) = {
         let num_del_variants_q = get_num_del_vars_per_string(query, max_distance);
@@ -746,7 +967,23 @@ pub fn get_candidates_cross(
 
     debug_assert_eq!(remaining.len(), 0);
 
-    Ok(get_hit_candidates_from_cis_cross(&convergent_chunks))
+    let candidates = get_hit_candidates_from_cis_cross(&convergent_chunks);
+    let dists = compute_dists(&candidates, &query, &reference, max_distance);
+
+    Ok(collect_true_hits(&candidates, &dists, max_distance))
+}
+
+fn check_strings_ascii(strings: &[impl AsRef<str>], input_type: InputType) -> Result<(), Error> {
+    for (idx, s) in strings.iter().enumerate() {
+        if !s.as_ref().is_ascii() {
+            return Err(Error::NonAsciiInput {
+                input_type,
+                offending_idx: idx,
+                offending_string: s.as_ref().to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn get_num_del_vars_per_string(
@@ -907,9 +1144,7 @@ unsafe fn cast_to_initialised_vec<T>(mut input: Vec<MaybeUninit<T>>) -> Vec<T> {
     Vec::from_raw_parts(ptr, len, cap)
 }
 
-fn get_hit_candidates_from_cis_within(
-    convergent_indices: &[impl AsRef<[u32]> + Sync],
-) -> Vec<(u32, u32)> {
+fn get_hit_candidates_within(convergent_indices: &[impl AsRef<[u32]> + Sync]) -> Vec<(u32, u32)> {
     let num_hit_candidates = convergent_indices
         .iter()
         .map(|indices| get_num_k_combs(indices.as_ref().len(), 2))
@@ -981,31 +1216,7 @@ where
     hit_candidates
 }
 
-/// Read lines from in_stream until EOF and collect into vector of byte vectors. Return any
-/// errors if trouble reading, or if the input text contains non-ASCII data. The returned vector
-/// is guaranteed to only contain ASCII bytes.
-pub fn get_input_lines_as_ascii(in_stream: impl BufRead) -> Result<Vec<String>, Error> {
-    let mut strings = Vec::new();
-
-    for (idx, line) in in_stream.lines().enumerate() {
-        let line_unwrapped = line?;
-
-        if !line_unwrapped.is_ascii() {
-            let err_msg = format!(
-                "non-ASCII data is currently unsupported (\"{}\" from input line {})",
-                line_unwrapped,
-                idx + 1
-            );
-            return Err(Error::new(InvalidData, err_msg));
-        }
-
-        strings.push(line_unwrapped);
-    }
-
-    Ok(strings)
-}
-
-pub fn compute_dists(
+fn compute_dists(
     hit_candidates: &[(u32, u32)],
     query: &[impl AsRef<str> + Sync],
     reference: &[impl AsRef<str> + Sync],
@@ -1032,12 +1243,11 @@ pub fn compute_dists(
 }
 
 /// Examine and double check hits to see if they are real
-pub fn collect_true_hits(
+fn collect_true_hits(
     hit_candidates: &[(u32, u32)],
     dists: &[u8],
     max_distance: MaxDistance,
-    zero_index: bool,
-) -> (Vec<u32>, Vec<u32>, Vec<u8>) {
+) -> NeighborPairs {
     let mut qi_filtered = Vec::with_capacity(dists.len());
     let mut ri_filtered = Vec::with_capacity(dists.len());
     let mut dists_filtered = Vec::with_capacity(dists.len());
@@ -1046,49 +1256,26 @@ pub fn collect_true_hits(
         if d > max_distance.as_u8() {
             continue;
         }
-        if zero_index {
-            qi_filtered.push(qi);
-            ri_filtered.push(ri);
-            dists_filtered.push(d);
-        } else {
-            qi_filtered.push(qi + 1);
-            ri_filtered.push(ri + 1);
-            dists_filtered.push(d);
-        }
+        qi_filtered.push(qi);
+        ri_filtered.push(ri);
+        dists_filtered.push(d);
     }
 
     qi_filtered.shrink_to_fit();
     ri_filtered.shrink_to_fit();
     dists_filtered.shrink_to_fit();
 
-    (qi_filtered, ri_filtered, dists_filtered)
-}
-
-/// Write to stdout
-pub fn write_true_hits(
-    hit_candidates: &[(u32, u32)],
-    dists: &[u8],
-    max_distance: MaxDistance,
-    zero_index: bool,
-    writer: &mut impl Write,
-) {
-    for (&(qi, ri), &d) in hit_candidates.into_iter().zip(dists.into_iter()) {
-        if d > max_distance.as_u8() {
-            continue;
-        }
-
-        if zero_index {
-            write!(writer, "{},{},{}\n", qi, ri, d).unwrap();
-        } else {
-            write!(writer, "{},{},{}\n", qi + 1, ri + 1, d).unwrap();
-        }
+    NeighborPairs {
+        row: qi_filtered,
+        col: ri_filtered,
+        dists: dists_filtered,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{self, BufRead, Cursor};
 
     // component tests
 
@@ -1109,179 +1296,8 @@ mod tests {
         assert_eq!(result, vec![4, 4, 4]);
     }
 
-    #[test]
-    fn test_get_input_lines_as_ascii() {
-        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nbaz\n".as_bytes())
-            .expect("input is valid ASCII");
-        let expected: Vec<String> = vec!["foo".into(), "bar".into(), "baz".into()];
-        assert_eq!(strings, expected);
-    }
-
-    #[test]
-    fn test_get_input_lines_as_ascii_rejects_non_ascii() {
-        let strings = get_input_lines_as_ascii(&mut "foo\nbar\nバズ\n".as_bytes());
-        assert!(matches!(strings, Err(_)));
-    }
-
     const TEST_QUERY: [&str; 5] = ["fizz", "fuzz", "buzz", "izzy", "lofi"];
     const TEST_REF: [&str; 3] = ["file", "tofu", "fizz"];
-
-    #[test]
-    fn test_get_candidates_within() {
-        let cases = [
-            (
-                MaxDistance::try_from(1).expect("legal"),
-                vec![(0, 1), (0, 3), (1, 2)],
-            ),
-            (
-                MaxDistance::try_from(2).expect("legal"),
-                vec![(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (2, 3)],
-            ),
-        ];
-        for (mdist, expected) in cases {
-            let result = get_candidates_within(&TEST_QUERY, mdist).expect("short input");
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_get_candidates_within_cached() {
-        let cached = CachedSymdel::new(&TEST_QUERY, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let cases = [
-            (
-                MaxDistance::try_from(1).expect("legal"),
-                (
-                    vec![(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (2, 3)],
-                    vec![1, 255, 255, 255, 1, 255, 255],
-                ),
-            ),
-            (
-                MaxDistance::try_from(2).expect("legal"),
-                (
-                    vec![(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (2, 3)],
-                    vec![1, 2, 2, 255, 1, 255, 255],
-                ),
-            ),
-        ];
-        for (mdist, expected) in cases {
-            let result = cached.get_candidates_within(mdist).expect("legal max dist");
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_get_candidates_cross() {
-        let cases = [
-            (
-                MaxDistance::try_from(1).expect("legal"),
-                vec![(0, 2), (1, 2), (3, 2)],
-            ),
-            (
-                MaxDistance::try_from(2).expect("legal"),
-                vec![
-                    (0, 0),
-                    (0, 2),
-                    (1, 1),
-                    (1, 2),
-                    (2, 2),
-                    (3, 2),
-                    (4, 0),
-                    (4, 1),
-                    (4, 2),
-                ],
-            ),
-        ];
-        for (mdist, expected) in cases {
-            let result = get_candidates_cross(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_get_candidates_cross_partially_cached() {
-        let cached = CachedSymdel::new(&TEST_REF, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let cases = [
-            (
-                MaxDistance::try_from(1).expect("legal"),
-                (vec![(0, 2), (1, 2), (3, 2)], vec![0, 1, 255]),
-            ),
-            (
-                MaxDistance::try_from(2).expect("legal"),
-                (
-                    vec![
-                        (0, 0),
-                        (0, 2),
-                        (1, 1),
-                        (1, 2),
-                        (2, 2),
-                        (3, 2),
-                        (4, 0),
-                        (4, 1),
-                        (4, 2),
-                    ],
-                    vec![2, 0, 255, 1, 2, 2, 255, 2, 255],
-                ),
-            ),
-        ];
-        for (mdist, expected) in cases {
-            let result = cached
-                .get_candidates_cross(&TEST_QUERY, mdist)
-                .expect("legal max dist");
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_get_candidates_cross_fully_cached() {
-        let cached_q = CachedSymdel::new(&TEST_QUERY, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let cached_r = CachedSymdel::new(&TEST_REF, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let cases = [
-            (
-                MaxDistance::try_from(1).expect("legal"),
-                (
-                    vec![
-                        (0, 0),
-                        (0, 2),
-                        (1, 1),
-                        (1, 2),
-                        (2, 2),
-                        (3, 2),
-                        (4, 0),
-                        (4, 1),
-                        (4, 2),
-                    ],
-                    vec![255, 0, 255, 1, 255, 255, 255, 255, 255],
-                ),
-            ),
-            (
-                MaxDistance::try_from(2).expect("legal"),
-                (
-                    vec![
-                        (0, 0),
-                        (0, 2),
-                        (1, 1),
-                        (1, 2),
-                        (2, 2),
-                        (3, 2),
-                        (4, 0),
-                        (4, 1),
-                        (4, 2),
-                    ],
-                    vec![2, 0, 255, 1, 2, 2, 255, 2, 255],
-                ),
-            ),
-        ];
-        for (mdist, expected) in cases {
-            let result: (Vec<(u32, u32)>, Vec<u8>) = cached_r
-                .get_candidates_cross_against_cached(&cached_q, mdist)
-                .expect("legal max dist");
-            assert_eq!(result, expected);
-        }
-    }
 
     #[test]
     fn test_compute_dists() {
@@ -1329,247 +1345,286 @@ mod tests {
                 (0..5).tuple_combinations().collect_vec(),
                 vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
                 MaxDistance::try_from(1).expect("legal"),
-                (vec![0, 1], vec![1, 2], vec![1, 1]),
+                NeighborPairs {
+                    row: vec![0, 1],
+                    col: vec![1, 2],
+                    dists: vec![1, 1],
+                },
             ),
             (
                 (0..5).tuple_combinations().collect_vec(),
                 vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
                 MaxDistance::try_from(2).expect("legal"),
-                (vec![0, 0, 0, 1], vec![1, 2, 3, 2], vec![1, 2, 2, 1]),
+                NeighborPairs {
+                    row: vec![0, 0, 0, 1],
+                    col: vec![1, 2, 3, 2],
+                    dists: vec![1, 2, 2, 1],
+                },
             ),
         ];
 
         for (candidates, dists, mdist, expected) in cases {
-            let result = collect_true_hits(&candidates, &dists, mdist, true);
+            let result = collect_true_hits(&candidates, &dists, mdist);
             assert_eq!(result, expected);
         }
     }
 
     #[test]
-    fn test_write_true_hits() {
+    fn test_symdel_within() {
         let cases = [
             (
-                (0..5).tuple_combinations().collect_vec(),
-                vec![1, 255, 255, 255, 1, 255, 255, 255, 255, 255],
-                MaxDistance::try_from(1).expect("legal"),
-                "0,1,1\n1,2,1\n",
+                1,
+                NeighborPairs {
+                    row: vec![0, 1],
+                    col: vec![1, 2],
+                    dists: vec![1, 1],
+                },
             ),
             (
-                (0..5).tuple_combinations().collect_vec(),
-                vec![1, 2, 2, 255, 1, 255, 255, 255, 255, 255],
-                MaxDistance::try_from(2).expect("legal"),
-                "0,1,1\n0,2,2\n0,3,2\n1,2,1\n",
+                2,
+                NeighborPairs {
+                    row: vec![0, 0, 0, 1],
+                    col: vec![1, 2, 3, 2],
+                    dists: vec![1, 2, 2, 1],
+                },
             ),
         ];
-        let mut test_output_stream = Vec::new();
+        for (mdist, expected) in cases {
+            let result = get_neighbors_within(&TEST_QUERY, mdist).expect("short input");
+            assert_eq!(result, expected);
+        }
+    }
 
-        for (candidates, dists, mdist, expected) in cases {
-            write_true_hits(&candidates, &dists, mdist, true, &mut test_output_stream);
-            assert_eq!(test_output_stream, expected.as_bytes());
-            test_output_stream.clear();
+    #[test]
+    fn test_symdel_within_cached() {
+        let cached = CachedRef::new(&TEST_QUERY, 2).expect("short input");
+        let cases = [
+            (
+                1,
+                NeighborPairs {
+                    row: vec![0, 1],
+                    col: vec![1, 2],
+                    dists: vec![1, 1],
+                },
+            ),
+            (
+                2,
+                NeighborPairs {
+                    row: vec![0, 0, 0, 1],
+                    col: vec![1, 2, 3, 2],
+                    dists: vec![1, 2, 2, 1],
+                },
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = cached.get_neighbors_within(mdist).expect("legal max dist");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_symdel_cross() {
+        let cases = [
+            (
+                1,
+                NeighborPairs {
+                    row: vec![0, 1],
+                    col: vec![2, 2],
+                    dists: vec![0, 1],
+                },
+            ),
+            (
+                2,
+                NeighborPairs {
+                    row: vec![0, 0, 1, 2, 3, 4],
+                    col: vec![0, 2, 2, 2, 2, 1],
+                    dists: vec![2, 0, 1, 2, 2, 2],
+                },
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = get_neighbors_across(&TEST_QUERY, &TEST_REF, mdist).expect("valid input");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_candidates_cross_partially_cached() {
+        let cached = CachedRef::new(&TEST_REF, 2).expect("short input");
+        let cases = [
+            (
+                1,
+                NeighborPairs {
+                    row: vec![0, 1],
+                    col: vec![2, 2],
+                    dists: vec![0, 1],
+                },
+            ),
+            (
+                2,
+                NeighborPairs {
+                    row: vec![0, 0, 1, 2, 3, 4],
+                    col: vec![0, 2, 2, 2, 2, 1],
+                    dists: vec![2, 0, 1, 2, 2, 2],
+                },
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = cached
+                .get_neighbors_across(&TEST_QUERY, mdist)
+                .expect("legal max dist");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_candidates_cross_fully_cached() {
+        let cached_q = CachedRef::new(&TEST_QUERY, 2).expect("short input");
+        let cached_r = CachedRef::new(&TEST_REF, 2).expect("short input");
+        let cases = [
+            (
+                1,
+                NeighborPairs {
+                    row: vec![0, 1],
+                    col: vec![2, 2],
+                    dists: vec![0, 1],
+                },
+            ),
+            (
+                2,
+                NeighborPairs {
+                    row: vec![0, 0, 1, 2, 3, 4],
+                    col: vec![0, 2, 2, 2, 2, 1],
+                    dists: vec![2, 0, 1, 2, 2, 2],
+                },
+            ),
+        ];
+        for (mdist, expected) in cases {
+            let result = cached_r
+                .get_neighbors_across_cached(&cached_q, mdist)
+                .expect("legal max dist");
+            assert_eq!(result, expected);
         }
     }
 
     // testing on real world data
 
-    static CDR3_Q_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_a.txt");
-    static CDR3_R_BYTES: &[u8] = include_bytes!("../test_files/cdr3b_10k_b.txt");
-    static EXPECTED_BYTES_WITHIN_1: &[u8] = include_bytes!("../test_files/results_10k_a.txt");
-    static EXPECTED_BYTES_WITHIN_2: &[u8] = include_bytes!("../test_files/results_10k_a_d2.txt");
-    static EXPECTED_BYTES_CROSS_1: &[u8] = include_bytes!("../test_files/results_10k_cross.txt");
-    static EXPECTED_BYTES_CROSS_2: &[u8] = include_bytes!("../test_files/results_10k_cross_d2.txt");
+    static CDR3_Q_BYTES: &[u8] = include_bytes!("../../test_files/cdr3b_10k_a.txt");
+    static CDR3_R_BYTES: &[u8] = include_bytes!("../../test_files/cdr3b_10k_b.txt");
+    static EXPECTED_BYTES_WITHIN_1: &[u8] = include_bytes!("../../test_files/results_10k_a.txt");
+    static EXPECTED_BYTES_WITHIN_2: &[u8] = include_bytes!("../../test_files/results_10k_a_d2.txt");
+    static EXPECTED_BYTES_CROSS_1: &[u8] = include_bytes!("../../test_files/results_10k_cross.txt");
+    static EXPECTED_BYTES_CROSS_2: &[u8] =
+        include_bytes!("../../test_files/results_10k_cross_d2.txt");
 
     fn bytes_as_ascii_lines(bytes: &[u8]) -> Vec<String> {
-        get_input_lines_as_ascii(Cursor::new(bytes)).expect("test files should be valid ASCII")
+        Cursor::new(bytes)
+            .lines()
+            .collect::<io::Result<Vec<String>>>()
+            .expect("test files have valid lines")
+    }
+
+    fn bytes_as_neighbour_pairs(bytes: &[u8]) -> NeighborPairs {
+        let mut i = Vec::new();
+        let mut j = Vec::new();
+        let mut dists = Vec::new();
+
+        Cursor::new(bytes).lines().for_each(|v| {
+            let line = v.expect("test files have valid lines");
+            let triplet = line.split(",").collect_vec();
+            i.push(
+                triplet[0]
+                    .parse::<u32>()
+                    .expect("test files have int triplets")
+                    - 1,
+            );
+            j.push(
+                triplet[1]
+                    .parse::<u32>()
+                    .expect("test files have int triplets")
+                    - 1,
+            );
+            dists.push(
+                triplet[2]
+                    .parse::<u8>()
+                    .expect("test files have int triplets"),
+            );
+        });
+
+        NeighborPairs {
+            row: i,
+            col: j,
+            dists,
+        }
     }
 
     #[test]
     fn test_within() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
-        let mdist_one = MaxDistance::try_from(1).expect("legal");
-        let mdist_two = MaxDistance::try_from(2).expect("legal");
-        let mut test_output_stream = Vec::new();
 
-        let candidates = get_candidates_within(&query, mdist_one).expect("short input");
-        let dists = compute_dists(&candidates, &query, &query, mdist_one);
-        write_true_hits(
-            &candidates,
-            &dists,
-            mdist_one,
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_WITHIN_1);
+        let hits = get_neighbors_within(&query, 1).expect("short input");
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_1));
 
-        test_output_stream.clear();
-
-        let candidates = get_candidates_within(&query, mdist_two).expect("short input");
-        let dists = compute_dists(&candidates, &query, &query, mdist_two);
-        write_true_hits(
-            &candidates,
-            &dists,
-            mdist_two,
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_WITHIN_2);
+        let hits = get_neighbors_within(&query, 2).expect("short input");
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_2));
     }
 
     #[test]
     fn test_cross() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-        let mut test_output_stream = Vec::new();
 
-        let candidates =
-            get_candidates_cross(&query, &reference, MaxDistance::try_from(1).expect("legal"))
-                .expect("valid inputs");
-        let dists = compute_dists(
-            &candidates,
-            &query,
-            &reference,
-            MaxDistance::try_from(1).expect("legal"),
-        );
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(1).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_1);
+        let hits = get_neighbors_across(&query, &reference, 1).expect("valid inputs");
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
-        test_output_stream.clear();
-
-        let candidates =
-            get_candidates_cross(&query, &reference, MaxDistance::try_from(2).expect("legal"))
-                .expect("valid inputs");
-        let dists = compute_dists(
-            &candidates,
-            &query,
-            &reference,
-            MaxDistance::try_from(2).expect("legal"),
-        );
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(2).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_2);
+        let hits = get_neighbors_across(&query, &reference, 2).expect("valid inputs");
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }
 
     #[test]
     fn test_within_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
-        let mut test_output_stream = Vec::new();
+        let cached = CachedRef::new(&query, 2).expect("short input");
 
-        let cached = CachedSymdel::new(&query, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let (candidates, dists) = cached
-            .get_candidates_within(MaxDistance::try_from(1).expect("legal"))
-            .expect("legal max distance");
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(1).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_WITHIN_1);
+        let hits = cached.get_neighbors_within(1).expect("legal max distance");
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_1));
 
-        test_output_stream.clear();
-
-        let (candidates, dists) = cached
-            .get_candidates_within(MaxDistance::try_from(2).expect("legal"))
-            .expect("legal max distance");
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(2).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_WITHIN_2);
+        let hits = cached.get_neighbors_within(2).expect("legal max distance");
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_WITHIN_2));
     }
 
     #[test]
     fn test_cross_partially_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-        let mut test_output_stream = Vec::new();
+        let cached = CachedRef::new(&reference, 2).expect("short input");
 
-        let cached = CachedSymdel::new(&reference, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let (candidates, dists) = cached
-            .get_candidates_cross(&query, MaxDistance::try_from(1).expect("legal"))
+        let hits = cached
+            .get_neighbors_across(&query, 1)
             .expect("legal max distance");
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(1).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_1);
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
-        test_output_stream.clear();
-
-        let (candidates, dists) = cached
-            .get_candidates_cross(&query, MaxDistance::try_from(2).expect("legal"))
+        let hits = cached
+            .get_neighbors_across(&query, 2)
             .expect("legal max distance");
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(2).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_2);
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }
 
     #[test]
     fn test_cross_fully_cached() {
         let query = bytes_as_ascii_lines(CDR3_Q_BYTES);
         let reference = bytes_as_ascii_lines(CDR3_R_BYTES);
-        let mut test_output_stream = Vec::new();
+        let cached_query = CachedRef::new(&query, 2).expect("short input");
+        let cached_reference = CachedRef::new(&reference, 2).expect("short input");
 
-        let cached_query = CachedSymdel::new(&query, MaxDistance::try_from(2).expect("legal"))
-            .expect("short input");
-        let cached_reference =
-            CachedSymdel::new(&reference, MaxDistance::try_from(2).expect("legal"))
-                .expect("short input");
-        let (candidates, dists) = cached_reference
-            .get_candidates_cross_against_cached(
-                &cached_query,
-                MaxDistance::try_from(1).expect("legal"),
-            )
+        let hits = cached_reference
+            .get_neighbors_across_cached(&cached_query, 1)
             .expect("legal max distance");
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(1).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_1);
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_1));
 
-        test_output_stream.clear();
-
-        let (candidates, dists) = cached_reference
-            .get_candidates_cross_against_cached(
-                &cached_query,
-                MaxDistance::try_from(2).expect("legal"),
-            )
+        let hits = cached_reference
+            .get_neighbors_across_cached(&cached_query, 2)
             .expect("legal max distance");
-        write_true_hits(
-            &candidates,
-            &dists,
-            MaxDistance::try_from(2).expect("legal"),
-            false,
-            &mut test_output_stream,
-        );
-        assert_eq!(test_output_stream, EXPECTED_BYTES_CROSS_2);
+        assert_eq!(hits, bytes_as_neighbour_pairs(EXPECTED_BYTES_CROSS_2));
     }
 }

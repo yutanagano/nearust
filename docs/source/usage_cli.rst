@@ -4,24 +4,24 @@ Usage (CLI)
 
 .. tip:: 
 
-   You can also view nearust's inline help text with ``nearust --help``.
+   You can also view symscan's inline help text with ``symscan --help``.
 
 Basic usage
 -----------
 
-Give nearust a list of strings, and it will tell you which ones are similar. By
+Give symscan a list of strings, and it will tell you which ones are similar. By
 default, it will detect which strings are within one (Levenshtein) edit
-distance away from one another. Nearust reads its standard input stream and
+distance away from one another. Symscan reads its standard input stream and
 considers each line (delineated by newline characters) a separate string. A
 minimal example is below:
 
 .. code-block:: console
 
-   $ echo $'fizz\nfuzz\nbuzz' | nearust
+   $ echo $'fizz\nfuzz\nbuzz' | symscan
    1,2,1
    2,3,1
 
-As you can see, nearust outputs its result in plaintext to standard output.
+As you can see, symscan outputs its result in plaintext to standard output.
 Each line in its output corresponds to a pair of similar strings that is
 detected. The first two numbers in each line is the (1-indexed) line numbers
 corresponding to the two similar input strings. The third and final number is
@@ -35,7 +35,7 @@ pass the option ``-d <k>``:
 
 .. code-block:: console
 
-   $ echo $'fizz\nfuzz\nbuzz' | nearust -d 2
+   $ echo $'fizz\nfuzz\nbuzz' | symscan -d 2
    1,2,1
    1,3,2
    2,3,1
@@ -45,7 +45,7 @@ pass the option ``-z``:
 
 .. code-block:: console
 
-   $ echo $'fizz\nfuzz\nbuzz' | nearust -d 2 -z
+   $ echo $'fizz\nfuzz\nbuzz' | symscan -d 2 -z
    0,1,1
    0,2,2
    1,2,1
@@ -57,13 +57,13 @@ To read input from ``input.txt`` and write to ``output.txt``:
 
 .. code-block:: console
 
-   $ cat input.txt | nearust > output.txt
+   $ cat input.txt | symscan > output.txt
 
 or
 
 .. code-block:: console
 
-   $ nearust input.txt > output.txt
+   $ symscan input.txt > output.txt
 
 Look for pairs across two string sets
 -------------------------------------
@@ -74,4 +74,4 @@ other):
 
 .. code-block:: console
 
-   $ nearust set_a.txt set_b.txt > output.txt
+   $ symscan set_a.txt set_b.txt > output.txt

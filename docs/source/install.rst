@@ -9,13 +9,13 @@ Homebrew (recommended)
 
 .. code-block:: console
 
-   $ brew install yutanagano/tap/nearust
+   $ brew install yutanagano/tap/symscan
 
 Alternate methods
 .................
 
 Check out the releases page `releases page
-<https://github.com/yutanagano/nearust/releases>`_ on the project's GitHub.
+<https://github.com/yutanagano/symscan/releases>`_ on the project's GitHub.
 
 Python package
 --------------
@@ -25,7 +25,7 @@ PyPI (recommended)
 
 .. code-block:: console
 
-   $ pip install nearust
+   $ pip install symscan
 
 From source
 ...........
@@ -46,7 +46,7 @@ page.
 
 .. code-block:: console
 
-	$ pip install git+https://github.com/yutanagano/nearust.git@<VERSION_TAG>
+	$ pip install git+https://github.com/yutanagano/symscan.git@<VERSION_TAG>
 
 You can also clone the repository, and from within your Python environment,
 navigate to the project root directory and run:

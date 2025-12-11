@@ -1,13 +1,10 @@
-use crate::{
-    collect_true_hits, compute_dists, get_candidates_cross, get_candidates_within,
-    CachedSymdel as CSInternal, MaxDistance,
-};
 use numpy::IntoPyArray;
 use pyo3::{
     exceptions::PyValueError,
     prelude::*,
     types::{PyString, PyTuple},
 };
+use symscan::{get_neighbors_across, get_neighbors_within, CachedRef as CRInternal, NeighborPairs};
 
 /// A memoized implementation of symdel.
 ///
@@ -25,23 +22,22 @@ use pyo3::{
 ///     is set to X at construction, later calls to this instance's symdel
 ///     method will only be accept `max_distance` less than or equal to X.
 #[pyclass]
-struct CachedSymdel {
-    internal: CSInternal,
+struct CachedRef {
+    internal: CRInternal,
 }
 
 #[pymethods]
-impl CachedSymdel {
+impl CachedRef {
     #[new]
     #[pyo3(signature = (reference, max_distance = 1))]
     fn new(reference: &Bound<PyAny>, max_distance: u8) -> PyResult<Self> {
         let ref_handles = get_pystring_handles(&reference)?;
         let ref_views = get_str_refs(&ref_handles)?;
-        check_strings_ascii(&ref_views)?;
 
-        let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-        let internal = CSInternal::new(&ref_views, max_distance).map_err(PyValueError::new_err)?;
+        let internal = CRInternal::new(&ref_views, max_distance)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        Ok(CachedSymdel { internal })
+        Ok(CachedRef { internal })
     }
 
     /// Detect pairs of similar strings.
@@ -55,9 +51,6 @@ impl CachedSymdel {
     ///     specified when constructing the caller instance (as well as that
     ///     when constructing `query`, if `query` is set to a CachedSymdel
     ///     instance).
-    /// zero_index : bool, default=True
-    ///     If set to True, reports the indices of strings of interest using
-    ///     0-based indexing. Otherwise uses 1-based indexing.
     ///
     /// Returns
     /// -------
@@ -91,8 +84,8 @@ impl CachedSymdel {
     /// reference and stores the results in a hashmap held internally by the
     /// instance.
     ///
-    /// >>> import nearust
-    /// >>> cached = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"])
+    /// >>> import symscan
+    /// >>> cached = symscan.CachedSymdel(["fooo", "barr", "bazz", "buzz"])
     ///
     /// Then, call the symdel method with `query` set to an iterable over query
     /// strings to find similar strings across it and the reference set.
@@ -108,7 +101,7 @@ impl CachedSymdel {
     /// If you also want to memoize deletion variant computations on the query
     /// set as well, you can do so.
     ///
-    /// >>> cached_query = nearust.CachedSymdel(["fizz", "fuzz", "buzz"])
+    /// >>> cached_query = symscan.CachedSymdel(["fizz", "fuzz", "buzz"])
     /// >>> (i, j, dists) = cached.symdel(cached_query)
     /// >>> i
     /// array([1, 2, 2], dtype=uint32)
@@ -132,7 +125,7 @@ impl CachedSymdel {
     /// `max_distance` equal to X, it `max_distance` must be set to X or
     /// greater at construction time.
     ///
-    /// >>> cached_maxd2 = nearust.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
+    /// >>> cached_maxd2 = symscan.CachedSymdel(["fooo", "barr", "bazz", "buzz"], max_distance=2)
     /// >>> (i, j, dists) = cached_maxd2.symdel(["fizz", "fuzz", "buzz"])
     /// >>> i
     /// array([1, 2, 2], dtype=uint32)
@@ -148,31 +141,25 @@ impl CachedSymdel {
     /// >>> dists
     /// array([2, 2, 2, 1, 1, 0], dtype=uint8)
     /// >>> # max_distance > 2 will throw an error!: cached_maxd2.symdel(["fizz", "fuzz", "buzz"], max_distance=3)
-    #[pyo3(signature = (query = None, max_distance = 1, zero_index = true))]
-    fn symdel<'py>(
+    #[pyo3(signature = (query = None, max_distance = 1))]
+    fn get_neighbors<'py>(
         &self,
         py: Python<'py>,
         query: Option<&Bound<'py, PyAny>>,
         max_distance: u8,
-        zero_index: bool,
     ) -> PyResult<Bound<'py, PyTuple>> {
-        let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-
-        let (candidates, dists) = match query {
+        let NeighborPairs { row, col, dists } = match query {
             Some(q_given) => {
-                if let Ok(cached) = q_given.cast::<CachedSymdel>() {
+                if let Ok(cached) = q_given.cast::<CachedRef>() {
                     self.internal
-                        .get_candidates_cross_against_cached(
-                            &cached.borrow().internal,
-                            max_distance,
-                        )
-                        .map_err(PyValueError::new_err)?
+                        .get_neighbors_across_cached(&cached.borrow().internal, max_distance)
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else if let Ok(iterable) = q_given.try_iter() {
                     let query_handles = get_pystring_handles(&iterable)?;
                     let query_views = get_str_refs(&query_handles)?;
                     self.internal
-                        .get_candidates_cross(&query_views, max_distance)
-                        .map_err(PyValueError::new_err)?
+                        .get_neighbors_across(&query_views, max_distance)
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                 } else {
                     let type_name = q_given
                         .get_type()
@@ -186,19 +173,16 @@ impl CachedSymdel {
             }
             None => self
                 .internal
-                .get_candidates_within(max_distance)
-                .map_err(PyValueError::new_err)?,
+                .get_neighbors_within(max_distance)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?,
         };
-
-        let (qi, ri, filtered_dists) =
-            collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
         PyTuple::new(
             py,
             &[
-                qi.into_pyarray(py).as_any(),
-                ri.into_pyarray(py).as_any(),
-                filtered_dists.into_pyarray(py).as_any(),
+                row.into_pyarray(py).as_any(),
+                col.into_pyarray(py).as_any(),
+                dists.into_pyarray(py).as_any(),
             ],
         )
     }
@@ -212,9 +196,6 @@ impl CachedSymdel {
 /// reference : iterable of str, optional
 /// max_distance : int, default=1
 ///     The maximum edit distance at which strings are considered neighbors.
-/// zero_index : bool, default=True
-///     If set to True, reports the indices of strings of interest using
-///     0-based indexing. Otherwise uses 1-based indexing.
 ///
 /// Returns
 /// -------
@@ -238,8 +219,8 @@ impl CachedSymdel {
 /// Provide one iterable over strings to look for pairs of similar strings
 /// within it.
 ///
-/// >>> import nearust
-/// >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"])
+/// >>> import symscan
+/// >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"])
 /// >>> i
 /// array([0, 1], dtype=uint32)
 /// >>> j
@@ -250,7 +231,7 @@ impl CachedSymdel {
 /// To increase the threshold at which string pairs are considered similar, set
 /// `max_distance`.
 ///
-/// >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
+/// >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], max_distance=2)
 /// >>> i
 /// array([0, 0, 1], dtype=uint32)
 /// >>> j
@@ -261,67 +242,40 @@ impl CachedSymdel {
 /// To look for pairs of similar strings across two sets, provide two iterables
 /// over strings (`query` and `reference`).
 ///
-/// >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
+/// >>> (i, j, dists) = symscan.symdel(["fizz", "fuzz", "buzz"], ["fooo", "barr", "bazz", "buzz"])
 /// >>> i
 /// array([1, 2, 2], dtype=uint32)
 /// >>> j
 /// array([3, 2, 3], dtype=uint32)
 /// >>> dists
 /// array([1, 1, 0], dtype=uint8)
-///
-/// If you would like the string indices returned to be 1-based instead of
-/// 0-based (in a manner similar to the default behaviour of the CLI), you can
-/// set `zero_index` to False.
-///
-/// >>> (i, j, dists) = nearust.symdel(["fizz", "fuzz", "buzz"], zero_index=False)
-/// >>> i
-/// array([1, 2], dtype=uint32)
-/// >>> j
-/// array([2, 3], dtype=uint32)
-/// >>> dists
-/// array([1, 1], dtype=uint8)
 #[pyfunction]
-#[pyo3(signature = (query, reference = None, max_distance = 1, zero_index = true))]
-fn symdel<'py>(
+#[pyo3(signature = (query, reference = None, max_distance = 1))]
+fn get_neighbors<'py>(
     py: Python<'py>,
     query: &Bound<'py, PyAny>,
     reference: Option<&Bound<'py, PyAny>>,
     max_distance: u8,
-    zero_index: bool,
 ) -> PyResult<Bound<'py, PyTuple>> {
     let query_handles = get_pystring_handles(&query)?;
     let query_views = get_str_refs(&query_handles)?;
 
-    check_strings_ascii(&query_views)?;
-    let max_distance = MaxDistance::try_from(max_distance).map_err(PyValueError::new_err)?;
-
-    let (candidates, dists) = match reference {
+    let NeighborPairs { row, col, dists } = match reference {
         Some(ref_given) => {
             let ref_handles = get_pystring_handles(&ref_given)?;
             let ref_views = get_str_refs(&ref_handles)?;
-            check_strings_ascii(&ref_views)?;
-
-            let candidates = get_candidates_cross(&query_views, &ref_views, max_distance)
-                .map_err(PyValueError::new_err)?;
-            let dists = compute_dists(&candidates, &query_views, &ref_views, max_distance);
-            (candidates, dists)
+            get_neighbors_across(&query_views, &ref_views, max_distance)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
         }
-        None => {
-            let candidates =
-                get_candidates_within(&query_views, max_distance).map_err(PyValueError::new_err)?;
-            let dists = compute_dists(&candidates, &query_views, &query_views, max_distance);
-            (candidates, dists)
-        }
+        None => get_neighbors_within(&query_views, max_distance)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
     };
-
-    let (q_indices, ref_indices, dists) =
-        collect_true_hits(&candidates, &dists, max_distance, zero_index);
 
     PyTuple::new(
         py,
         &[
-            q_indices.into_pyarray(py).as_any(),
-            ref_indices.into_pyarray(py).as_any(),
+            row.into_pyarray(py).as_any(),
+            col.into_pyarray(py).as_any(),
             dists.into_pyarray(py).as_any(),
         ],
     )
@@ -345,23 +299,10 @@ fn get_str_refs<'py>(input: &'py [Bound<'py, PyString>]) -> PyResult<Vec<&'py st
         .collect::<PyResult<Vec<_>>>()
 }
 
-fn check_strings_ascii(strings: &[impl AsRef<str>]) -> Result<(), PyErr> {
-    for (idx, s) in strings.iter().enumerate() {
-        if !s.as_ref().is_ascii() {
-            let err_msg = format!(
-                "non-ASCII strings are currently unsupported ('{}' at index {idx})",
-                s.as_ref()
-            );
-            return Err(PyValueError::new_err(err_msg));
-        }
-    }
-    Ok(())
-}
-
 /// Fast detection of similar strings
-#[pymodule]
-fn nearust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(symdel, m)?)?;
-    m.add_class::<CachedSymdel>()?;
+#[pymodule(name = "symscan")]
+fn symscan_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(get_neighbors, m)?)?;
+    m.add_class::<CachedRef>()?;
     Ok(())
 }
