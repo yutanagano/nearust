@@ -4,8 +4,8 @@ authors = ["Yuta Nagano"]
 version = "0.7.0"
 edition = "2021"
 description = "Fast detection of similar strings in bulk"
-# repository = "https://github.com/yutanagano/symscan"
-# homepage = "https://github.com/yutanagano/symscan"
+repository = "https://github.com/yutanagano/symscan"
+homepage = "https://github.com/yutanagano/symscan"
 
 [dependencies]
 foldhash = "0.2"

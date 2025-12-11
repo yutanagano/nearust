@@ -4,6 +4,8 @@ authors = ["Yuta Nagano"]
 version = "0.7.0"
 edition = "2021"
 description = "Python bindings for symscan"
+repository = "https://github.com/yutanagano/symscan"
+homepage = "https://github.com/yutanagano/symscan"
 
 [dependencies]
 symscan = { version = "0.7.0", path = "../symscan/" }

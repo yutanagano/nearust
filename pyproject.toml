@@ -38,10 +38,10 @@ dependencies = ["numpy~=2.3"]
 dev = ["sphinx", "esbonio", "shibuya", "numpydoc", "pandas"]
 
 [project.urls]
-# Homepage = "https://github.com/yutanagano/symscan"
+Homepage = "https://github.com/yutanagano/symscan"
 # Documentation = "https://symscan.readthedocs.io"
-# Repository = "https://github.com/yutanagano/symscan"
-# Issues = "https://github.com/yutanagano/symscan/issues"
+Repository = "https://github.com/yutanagano/symscan"
+Issues = "https://github.com/yutanagano/symscan/issues"
 
 [tool.maturin]
 manifest-path = "symscan-py/Cargo.toml"
