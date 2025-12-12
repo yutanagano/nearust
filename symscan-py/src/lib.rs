@@ -138,7 +138,7 @@ impl CachedRef {
     ///
     /// It is possible to use a CachedRef instance as the query collection as well.
     ///
-    /// >>> cached_query = symscan.CachedRef(["fizz", "bazz", "buzz"])
+    /// >>> cached_query = symscan.CachedRef(["fizz", "fuzz", "buzz"])
     /// >>> (row, col, dists) = cached.get_neighbors_across(cached_query)
     /// >>> row
     /// array([1, 2, 2], dtype=uint32)
