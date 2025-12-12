@@ -1,5 +1,5 @@
-Rust library
-============
+Library (Rust)
+==============
 
 Installation
 ------------

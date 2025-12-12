@@ -22,6 +22,6 @@ faster for the above use case.
    :maxdepth: 2
    :caption: Contents:
 
-   rust
    cli
+   rust
    py

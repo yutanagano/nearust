@@ -8,10 +8,8 @@ Installation
 
    $ brew install yutanagano/tap/symscan
 
-.. admonition:: Alternative methods
-
-   Check out the releases page `releases page
-   <https://github.com/yutanagano/symscan/releases>`_ on the project's GitHub.
+You can also directly download precompiled binaries from the project `releases
+page <https://github.com/yutanagano/symscan/releases>`_.
 
 
 Usage
