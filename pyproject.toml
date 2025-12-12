@@ -45,6 +45,7 @@ Issues = "https://github.com/yutanagano/symscan/issues"
 
 [tool.maturin]
 manifest-path = "symscan-py/Cargo.toml"
+include = ["LICENSE-MIT", "LICENSE-APACHE"]
 profile = "release"
 
 [tool.cibuildwheel]
