@@ -1,3 +1,7 @@
+## Version 0.7.1
+
+- Bugfixes with license packaging
+
 ## Version 0.7.0
 
 - Reduce unnecessary allocations when computing string variant hashes
