@@ -9,7 +9,7 @@ import os
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "symscan"
+project = "SymScan"
 copyright = "2025, Yuta Nagano"
 author = "Yuta Nagano, Matthew Cowley"
 release = metadata.version("symscan")

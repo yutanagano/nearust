@@ -9,8 +9,8 @@ optimised for bulk-searching similar strings within one or across two large
 string collections at once (e.g. searching for similar protein sequences among
 a collection of 10M). The key algorithmic difference between SymScan and
 traditional symmetric deletion is the use of a [sort-merge
-join](https://en.wikipedia.org/wiki/Sort-merge_join) approach in place of
-hashmaps to discover input strings that share common deletion variants. This
+join](https://en.wikipedia.org/wiki/Sort-merge_join) approach in place of hash
+maps to discover input strings that share common deletion variants. This
 sort-and-scan approach trades off an additional factor of O(log N) (with N the
 total number of strings being compared) in expected time complexity for
 improved cache locality and effective parallelization, and ends up being much

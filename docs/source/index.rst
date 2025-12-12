@@ -1,21 +1,27 @@
-.. symscan documentation master file, created by
-   sphinx-quickstart on Sun Oct 19 16:14:29 2025.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
-symscan
+SymScan
 =======
 
-**symscan** is a tool for fast detection of nearest neighbour strings that fall
-within a threshold edit distance. It is a fast, multi-threaded, CPU-based
-implementation of Chotisorayuth and Mayer's `symdel algorithm
-<https://arxiv.org/abs/2403.09010v1>`_. It is available both as a CLI tool and
-as a Python package.
+**SymScan** enables extremely fast discovery of pairs of similar strings within
+and across large collections. It is available as a :doc:`Rust library <rust>`,
+a :doc:`CLI tool <cli>`, and a :doc:`Python package <py>`.
+
+SymScan is a variation on the `symmetric deletion
+<https://seekstorm.com/blog/1000x-spelling-correction/>`_ algorithm that is
+optimised for bulk-searching similar strings within one or across two large
+string collections at once (e.g. searching for similar protein sequences among
+a collection of 10M). The key algorithmic difference between SymScan and
+traditional symmetric deletion is the use of a `sort-merge join
+<https://en.wikipedia.org/wiki/Sort-merge_join>`_ approach in place of hash
+maps to discover input strings that share common deletion variants. This
+sort-and-scan approach trades off an additional factor of O(log N) (with N the
+total number of strings being compared) in expected time complexity for
+improved cache locality and effective parallelization, and ends up being much
+faster for the above use case.
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
-   install
-   usage_cli
-   usage_py
+   rust
+   cli
+   py
