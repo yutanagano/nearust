@@ -67,20 +67,25 @@ To read input from ``input.txt`` and write to ``output.txt``:
 
 .. code-block:: console
 
-   $ cat input.txt | symscan > output.txt
+   $ symscan input.txt > output.txt
 
 or
 
 .. code-block:: console
 
-   $ symscan input.txt > output.txt
+   $ < input.txt symscan > output.txt
+
+or
+
+.. code-block:: console
+
+   $ cat input.txt | symscan > output.txt
 
 Look for pairs across two string sets
 .....................................
 
 To look strictly for strings in ``set_a.txt`` that are similar to strings in
-``set_b.txt`` (and ignore pairs within the sets that are similar to each
-other):
+``set_b.txt`` (ignores pairs within sets):
 
 .. code-block:: console
 
