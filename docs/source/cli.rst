@@ -6,7 +6,7 @@ Installation
 
 .. code-block:: console
 
-   $ brew install yutanagano/tap/symscan
+   $ brew install yutanagano/tap/symscan-cli
 
 You can also directly download precompiled binaries from the project `releases
 page <https://github.com/yutanagano/symscan/releases>`_.

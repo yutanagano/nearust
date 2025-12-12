@@ -23,7 +23,7 @@ faster for the above use case.
 ### CLI
 
 ```sh
-brew install yutanagano/tap/symscan
+brew install yutanagano/tap/symscan-cli
 ```
 
 ### Rust library
