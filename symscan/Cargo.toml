@@ -5,6 +5,7 @@ version.workspace = true
 edition = "2021"
 description = "Fast discovery of similar strings in bulk"
 license = "MIT OR Apache-2.0"
+exclude = ["benches"]
 repository = "https://github.com/yutanagano/symscan"
 homepage = "https://github.com/yutanagano/symscan"
 
