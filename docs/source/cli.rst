@@ -4,25 +4,22 @@ CLI Application
 Installation
 ------------
 
-Homebrew (recommended)
-......................
-
 .. code-block:: console
 
    $ brew install yutanagano/tap/symscan
 
-Alternate methods
-.................
+.. admonition:: Alternative methods
 
-Check out the releases page `releases page
-<https://github.com/yutanagano/symscan/releases>`_ on the project's GitHub.
+   Check out the releases page `releases page
+   <https://github.com/yutanagano/symscan/releases>`_ on the project's GitHub.
+
+
+Usage
+-----
 
 .. tip:: 
 
    You can also view symscan's inline help text with ``symscan --help``.
-
-Basic usage
------------
 
 Give symscan a list of strings, and it will tell you which ones are similar. By
 default, it will detect which strings are within one (Levenshtein) edit
@@ -43,7 +40,7 @@ corresponding to the two similar input strings. The third and final number is
 the number of edits separating the two strings.
 
 Options
--------
+.......
 
 To look for string pairs that are at most ``<k>`` edits away from each other,
 pass the option ``-d <k>``:
@@ -66,7 +63,7 @@ pass the option ``-z``:
    1,2,1
 
 Read from and write to files
-----------------------------
+............................
 
 To read input from ``input.txt`` and write to ``output.txt``:
 
@@ -81,7 +78,7 @@ or
    $ symscan input.txt > output.txt
 
 Look for pairs across two string sets
--------------------------------------
+.....................................
 
 To look strictly for strings in ``set_a.txt`` that are similar to strings in
 ``set_b.txt`` (and ignore pairs within the sets that are similar to each

@@ -4,8 +4,6 @@ Rust library
 Installation
 ------------
 
-From within your Rust project, run:
-
 .. code-block:: console
 
    $ cargo add symscan
