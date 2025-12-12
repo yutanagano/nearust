@@ -3,7 +3,7 @@ name = "symscan-cli"
 authors = ["Yuta Nagano"]
 version.workspace = true
 edition = "2021"
-description = "Fast detection of similar strings"
+description = "Fast discovery of similar strings in bulk"
 repository = "https://github.com/yutanagano/symscan"
 homepage = "https://github.com/yutanagano/symscan"
 

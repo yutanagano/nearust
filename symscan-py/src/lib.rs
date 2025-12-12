@@ -359,7 +359,7 @@ fn get_str_refs<'py>(input: &'py [Bound<'py, PyString>]) -> PyResult<Vec<&'py st
         .collect::<PyResult<Vec<_>>>()
 }
 
-/// Fast detection of similar strings
+/// Fast discovery of similar strings in bulk
 #[pymodule(name = "symscan")]
 fn symscan_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_neighbors_within, m)?)?;

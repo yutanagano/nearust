@@ -5,7 +5,7 @@ use std::io::{self, BufRead, BufReader, BufWriter, Error, ErrorKind::InvalidData
 use std::process;
 use symscan::{get_neighbors_across, get_neighbors_within, NeighborPairs};
 
-/// Minimal CLI utility for fast detection of nearest neighbour strings that fall within a
+/// Minimal CLI utility for fast discovery of nearest neighbour strings that fall within a
 /// threshold edit distance.
 ///
 /// If you provide symscan with a path to a [FILE_QUERY], it will read its contents for input. If
