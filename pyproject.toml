@@ -39,7 +39,7 @@ dev = ["sphinx", "esbonio", "shibuya", "numpydoc", "pandas"]
 
 [project.urls]
 Homepage = "https://github.com/yutanagano/symscan"
-# Documentation = "https://symscan.readthedocs.io"
+Documentation = "https://symscan.readthedocs.io"
 Repository = "https://github.com/yutanagano/symscan"
 Issues = "https://github.com/yutanagano/symscan/issues"
 
