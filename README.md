@@ -22,19 +22,19 @@ faster for the above use case.
 
 ### CLI
 
-```console
+```bash
 $ brew install yutanagano/tap/symscan
 ```
 
 ### Rust library
 
-```console
+```bash
 $ cargo add symscan
 ```
 
 ### Python package
 
-```console
+```bash
 $ pip install symscan
 ```
 
