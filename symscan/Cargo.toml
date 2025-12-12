@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 exclude = ["benches"]
 repository = "https://github.com/yutanagano/symscan"
 homepage = "https://github.com/yutanagano/symscan"
+readme = "README.md"
 
 [dependencies]
 foldhash = "0.2"
