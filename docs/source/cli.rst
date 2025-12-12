@@ -1,6 +1,21 @@
-Usage (CLI)
-===========
+CLI Application
+===============
 
+Installation
+------------
+
+Homebrew (recommended)
+......................
+
+.. code-block:: console
+
+   $ brew install yutanagano/tap/symscan
+
+Alternate methods
+.................
+
+Check out the releases page `releases page
+<https://github.com/yutanagano/symscan/releases>`_ on the project's GitHub.
 
 .. tip:: 
 
