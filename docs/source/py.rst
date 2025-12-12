@@ -1,5 +1,5 @@
-Python package
-==============
+Library (Python bindings)
+=========================
 
 Installation
 ------------
@@ -7,22 +7,6 @@ Installation
 .. code-block:: console
 
    $ pip install symscan
-
-.. admonition:: Getting the latest development version
-
-   You must have ``rustc`` installed on your system to be able to compile the
-   underlying Rust code.
-
-   .. code-block:: console
-
-        $ pip install git+https://github.com/yutanagano/symscan.git
-
-   You can also clone the repository, and from within your Python environment,
-   navigate to the project root directory and run:
-
-   .. code-block:: console
-
-        $ pip install .
 
 Usage
 -----

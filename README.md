@@ -1,5 +1,7 @@
 # SymScan
 
+### Check out the [documentation page](https://symscan.readthedocs.io).
+
 **SymScan** enables extremely fast discovery of pairs of similar strings within
 and across large collections.
 
