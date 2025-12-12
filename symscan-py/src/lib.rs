@@ -138,7 +138,7 @@ impl CachedRef {
     ///
     /// It is possible to use a CachedRef instance as the query collection as well.
     ///
-    /// >>> cached_query = symscan.CachedRef(["fizz", "bazz", "buzz"])
+    /// >>> cached_query = symscan.CachedRef(["fizz", "fuzz", "buzz"])
     /// >>> (row, col, dists) = cached.get_neighbors_across(cached_query)
     /// >>> row
     /// array([1, 2, 2], dtype=uint32)
@@ -359,7 +359,7 @@ fn get_str_refs<'py>(input: &'py [Bound<'py, PyString>]) -> PyResult<Vec<&'py st
         .collect::<PyResult<Vec<_>>>()
 }
 
-/// Fast detection of similar strings
+/// Fast discovery of similar strings in bulk
 #[pymodule(name = "symscan")]
 fn symscan_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_neighbors_within, m)?)?;

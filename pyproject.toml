@@ -10,8 +10,8 @@ authors = [
   { name = "Matthew Cowley", email = "matthew.v.cowley@gmail.com" },
 ]
 maintainers = [{ name = "Yuta Nagano", email = "yutanagano51@proton.me" }]
-description = "Fast detection of similar strings in bulk"
-readme = "pypi_README.md"
+description = "Fast discovery of similar strings in bulk"
+readme = "README.md"
 keywords = [
   "edit-distance",
   "levenshtein-distance",

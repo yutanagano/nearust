@@ -20,7 +20,23 @@ faster for the above use case.
 
 ## Installing
 
-Coming soon!
+### CLI
+
+```sh
+brew install yutanagano/tap/symscan
+```
+
+### Rust library
+
+```sh
+cargo add symscan
+```
+
+### Python package
+
+```sh
+pip install symscan
+```
 
 ## Licensing
 

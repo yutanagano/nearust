@@ -1,7 +1,9 @@
-## Version 0.6.2
+## Version 0.7.0
 
 - Reduce unnecessary allocations when computing string variant hashes
 - Obtain references to Python strings at the PyO3 border instead of allocating and copying new Rust Strings
+- Refactor code to publish core code as Rust library crate
+- Refactor Python bindings to have more explicit, descriptive function names
 
 ## Version 0.6.1
 
