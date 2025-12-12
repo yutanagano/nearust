@@ -105,7 +105,7 @@ impl CachedRef {
     ///
     /// Parameters
     /// ----------
-    /// query : iterable of str
+    /// query : iterable of str or CachedRef
     /// max_distance : int, default=1
     ///     The maximum edit distance at which strings are considered neighbours.
     ///
@@ -124,11 +124,22 @@ impl CachedRef {
     ///
     /// Examples
     /// --------
-    /// Look for pairs of similar strings across two collections.
+    /// Look for pairs of similar strings across the cached reference and a query collection.
     ///
     /// >>> import symscan
     /// >>> cached = symscan.CachedRef(["fooo", "barr", "bazz", "buzz"])
     /// >>> (row, col, dists) = cached.get_neighbors_across(["fizz", "fuzz", "buzz"])
+    /// >>> row
+    /// array([1, 2, 2], dtype=uint32)
+    /// >>> col
+    /// array([3, 2, 3], dtype=uint32)
+    /// >>> dists
+    /// array([1, 1, 0], dtype=uint8)
+    ///
+    /// It is possible to use a CachedRef instance as the query collection as well.
+    ///
+    /// >>> cached_query = symscan.CachedRef(["fizz", "bazz", "buzz"])
+    /// >>> (row, col, dists) = cached.get_neighbors_across(cached_query)
     /// >>> row
     /// array([1, 2, 2], dtype=uint32)
     /// >>> col
