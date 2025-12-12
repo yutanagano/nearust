@@ -2,8 +2,8 @@ SymScan
 =======
 
 **SymScan** enables extremely fast discovery of pairs of similar strings within
-and across large collections. It is available as a `Rust library <rust>`_, a
-`CLI tool <cli>`_, and a `Python package <py>`_.
+and across large collections. It is available as a :doc:`Rust library <rust>`,
+a :doc:`CLI tool <cli>`, and a :doc:`Python package <py>`.
 
 SymScan is a variation on the `symmetric deletion
 <https://seekstorm.com/blog/1000x-spelling-correction/>`_ algorithm that is
